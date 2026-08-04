@@ -17,6 +17,35 @@ require_once 'infocard.php';
 $textbotlang = languagechange('text.json');
 if ($is_bot)
     return;
+// DB health gate: when the shared host runs out of connections, $pdo/$connect
+// arrive here as null and the first update()/mysqli_query() call fatals inside
+// eval — the user gets dead silence (this happened repeatedly in production,
+// e.g. wallet-charge receipts that were never acknowledged). The bot token
+// lives in config.php, so we can still answer the user without a DB.
+if (!($pdo instanceof PDO) || !($connect instanceof mysqli)) {
+    $rxDbGateMarker = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'rx_webhook_db_down.flag';
+    if (!is_file($rxDbGateMarker) || (time() - (int) @filemtime($rxDbGateMarker)) > 600) {
+        error_log('webhook: DB unavailable (pdo=' . (($pdo instanceof PDO) ? 'ok' : 'null') . ', mysqli=' . (($connect instanceof mysqli) ? 'ok' : 'null') . ') — telling user to retry.');
+        @touch($rxDbGateMarker);
+    }
+    if (!empty($callback_query_id)) {
+        try {
+            telegram('answerCallbackQuery', [
+                'callback_query_id' => $callback_query_id,
+                'text' => "⚠️ ربات موقتاً در دسترس نیست، لطفاً یک دقیقه دیگر دوباره تلاش کنید.",
+                'show_alert' => true,
+                'cache_time' => 5,
+            ]);
+        } catch (\Throwable $rxDbGateAckErr) {
+        }
+    } elseif (intval($from_id) != 0) {
+        try {
+            sendmessage($from_id, "⚠️ ربات موقتاً در دسترس نیست، لطفاً یک دقیقه دیگر دوباره تلاش کنید.\n\n📌 اگر رسید یا اطلاعاتی ارسال کرده‌اید، پس از چند دقیقه دوباره ارسال کنید.", null, 'HTML');
+        } catch (\Throwable $rxDbGateSendErr) {
+        }
+    }
+    return;
+}
 if (isset($update['chat_member'])) {
     $status = $update['chat_member']['new_chat_member']['status'];
     $from_id = $update['chat_member']['new_chat_member']['user']['id'];

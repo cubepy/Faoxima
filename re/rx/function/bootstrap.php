@@ -611,6 +611,13 @@ function ensureColumnExistsForUpdate($tableName, $fieldName, $valueSample = null
         return;
     }
 
+    if (!($pdo instanceof PDO)) {
+        $pdo = getDatabaseConnection();
+        if (!($pdo instanceof PDO)) {
+            return;
+        }
+    }
+
     try {
         $stmt = $pdo->prepare('SELECT COUNT(*) FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = ? AND column_name = ?');
         $stmt->execute([$tableName, $fieldName]);
@@ -638,6 +645,20 @@ function ensureColumnExistsForUpdate($tableName, $fieldName, $valueSample = null
 function update($table, $field, $newValue, $whereField = null, $whereValue = null)
 {
     global $pdo, $user;
+
+    if (!($pdo instanceof PDO)) {
+        // Same recovery path as select(): try to (re)connect instead of
+        // fataling with "prepare() on null" and killing the whole request.
+        $pdo = getDatabaseConnection();
+        if (!($pdo instanceof PDO)) {
+            $rxUpdMarker = sys_get_temp_dir() . DIRECTORY_SEPARATOR . 'rx_update_db_down.flag';
+            if (!is_file($rxUpdMarker) || (time() - (int) @filemtime($rxUpdMarker)) > 600) {
+                error_log('update(): Database connection is unavailable, skipping write to ' . $table . '.' . $field);
+                @touch($rxUpdMarker);
+            }
+            return;
+        }
+    }
 
     $valueToStore = normaliseUpdateValue($newValue);
     $whereValueToStore = $whereField !== null ? normaliseUpdateValue($whereValue) : null;
