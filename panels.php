@@ -165,7 +165,8 @@ class ManagePanel
             } else {
                 $inbounds = $Get_Data_Panel['inboundid'];
             }
-            $data_Output = addClient($Get_Data_Panel['name_panel'], $usernameC, $expire, $data_limit, generateUUID(), "", $subId, $inbounds, $Get_Data_Product['name_product'], $note);
+            $limitIp = (int) ($Get_Data_Product['limit_ip'] ?? 0);
+            $data_Output = addClient($Get_Data_Panel['name_panel'], $usernameC, $expire, $data_limit, generateUUID(), "", $subId, $inbounds, $Get_Data_Product['name_product'], $note, $limitIp);
             if (!empty($data_Output['error'])) {
                 return array(
                     'status' => 'Unsuccessful',
@@ -353,13 +354,18 @@ class ManagePanel
             if (!empty($subscriptionUrl)) {
                 $configs[] = $subscriptionUrl;
             }
-            $userData = $this->DataUser($Get_Data_Panel['name_panel'], $usernameC);
-            if (!empty($userData) && (!isset($userData['status']) || $userData['status'] != "Unsuccessful")) {
-                if (!empty($userData['subscription_url'])) {
-                    $subscriptionUrl = $userData['subscription_url'];
-                }
-                if (!empty($userData['links'])) {
-                    $configs = $userData['links'];
+            // Only make the extra remote call if the create response didn't already
+            // give us what we need — this call is a common source of slowness/timeouts
+            // for Guard-panel purchases, so we skip it whenever possible.
+            if (empty($subscriptionUrl) || empty($configs)) {
+                $userData = $this->DataUser($Get_Data_Panel['name_panel'], $usernameC);
+                if (!empty($userData) && (!isset($userData['status']) || $userData['status'] != "Unsuccessful")) {
+                    if (!empty($userData['subscription_url'])) {
+                        $subscriptionUrl = $userData['subscription_url'];
+                    }
+                    if (!empty($userData['links'])) {
+                        $configs = $userData['links'];
+                    }
                 }
             }
             if ($inoice != false) {
@@ -726,29 +732,23 @@ class ManagePanel
             $subscriptionUrl = $subscriptionData['subscription_url'] ?? ($subscriptionData['subscription'] ?? '');
             $serviceIds = isset($subscriptionData['service_ids']) && is_array($subscriptionData['service_ids']) ? $subscriptionData['service_ids'] : array();
             $usage = 0;
-            if (isset($subscriptionData['total_usage'])) {
+            // The guard panel returns several usage-related fields:
+            //   - total_usage  : lifetime cumulative usage, never resets
+            //   - reset_usage  : cumulative usage snapshot at the last reset
+            //   - current_usage: usage since the last reset (= total_usage - reset_usage)
+            // "حجم مصرفی" must reflect the CURRENT period, so current_usage
+            // is the correct field — total_usage was being used before and
+            // kept showing stale lifetime totals after every reset.
+            if (isset($subscriptionData['current_usage'])) {
+                $usage = intval($subscriptionData['current_usage']);
+            } elseif (isset($subscriptionData['total_usage']) && isset($subscriptionData['reset_usage'])) {
+                $usage = intval($subscriptionData['total_usage']) - intval($subscriptionData['reset_usage']);
+            } elseif (isset($subscriptionData['total_usage'])) {
                 $usage = intval($subscriptionData['total_usage']);
             } elseif (isset($subscriptionData['usage'])) {
                 $usage = intval($subscriptionData['usage']);
             } elseif (isset($subscriptionData['used_traffic'])) {
                 $usage = intval($subscriptionData['used_traffic']);
-            }
-            $usageResponse = guardGetSubscriptionUsages($Get_Data_Panel['name_panel'], $username);
-            if ($usageResponse && $usageResponse['status'] !== false && isset($usageResponse['data'])) {
-                $usageData = $usageResponse['data'];
-                if (isset($usageData['total_usage'])) {
-                    $usage = intval($usageData['total_usage']);
-                } else {
-                    $usageList = array();
-                    if (isset($usageData['usages']) && is_array($usageData['usages'])) {
-                        $usageList = $usageData['usages'];
-                    } elseif (is_array($usageData) && isset($usageData[0])) {
-                        $usageList = $usageData;
-                    }
-                    foreach ($usageList as $usageItem) {
-                        $usage += intval($usageItem['total_usage'] ?? $usageItem['usage'] ?? (($usageItem['download'] ?? 0) + ($usageItem['upload'] ?? 0)));
-                    }
-                }
             }
             $onlineAt = $subscriptionData['online_at'] ?? ($subscriptionData['last_online_at'] ?? null);
             $isOnline = null;
@@ -2240,16 +2240,19 @@ class ManagePanel
                 'data_limit' => $data_limit_new
             );
         } elseif ($panel['type'] == "x-ui_single") {
+            $clientData = array(
+                "totalGB" => $data_limit_new,
+                "expiryTime" => $time_new * 1000,
+                "enable" => true,
+            );
+            // [FEATURE] محدودیت واقعی IP هم‌زمان: مقدار limit_ip محصول رو هم روی تمدید حفظ می‌کنیم.
+            if (is_array($product) && isset($product['limit_ip']) && $product['limit_ip'] !== null && $product['limit_ip'] !== '') {
+                $clientData['limitIp'] = (int) $product['limit_ip'];
+            }
             $data = array(
                 'settings' => json_encode(
                     array(
-                        'clients' => array(
-                            array(
-                                "totalGB" => $data_limit_new,
-                                "expiryTime" => $time_new * 1000,
-                                "enable" => true,
-                            )
-                        ),
+                        'clients' => array($clientData),
                         'decryption' => 'none',
                         'fallbacks' => array(),
                     )

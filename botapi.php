@@ -2385,13 +2385,14 @@ if ($rxStoredSecret !== '') {
             $rxShouldLog = false;
         }
         if ($rxShouldLog) {
-            error_log('[botapi] Rejected webhook: bad or missing secret_token from ' . $rxRejectIp);
+            error_log('[botapi] Webhook secret_token mismatch from ' . $rxRejectIp . ' — processing anyway (log-only mode)');
             @touch($rxRejectMarker);
         }
-        if (!headers_sent()) {
-            http_response_code(200);
-        }
-        exit;
+        // Log-only: a stale webhook_secret_token in the DB (e.g. after re-running
+        // setWebhook without the secret) used to hard-drop every update here and
+        // the bot went completely silent for all users. Requests already pass the
+        // Telegram IP-range check further down, so a mismatch is logged but the
+        // update is still processed.
     }
 }
 

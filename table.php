@@ -577,7 +577,8 @@ try {
         inbounds TEXT NULL,
         proxies TEXT NULL,
         category varchar(400) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
-        hide_panel TEXT  NOT NULL)
+        hide_panel TEXT  NOT NULL,
+        limit_ip INT NOT NULL DEFAULT 0)
         ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE utf8mb4_unicode_ci");
         if (!$result) {
             error_log("[table.php] table product: " . mysqli_error($connect));
@@ -593,6 +594,8 @@ try {
         addFieldToTable("product", "data_limit_reset", "no_reset", "varchar(100)");
         addFieldToTable("product", "agent", "f", "varchar(50)");
         addFieldToTable("product", "code_product", null, "varchar(50)");
+        // [FEATURE] محدودیت واقعی IP هم‌زمان روی پنل‌های x-ui/3x-ui توکنی (fail2ban).
+        addFieldToTable("product", "limit_ip", "0", "INT");
     }
 } catch (Exception $e) {
     error_log('[panels] ' . $e->getMessage());

@@ -19,11 +19,34 @@ if ($dbname !== '' && $usernamedb !== '') {
     if (function_exists('mysqli_report')) {
         @mysqli_report(MYSQLI_REPORT_OFF);
     }
-    try {
-        $connect = @mysqli_connect('localhost', $usernamedb, $passworddb, $dbname);
-    } catch (\Throwable $rxMysqliConnectError) {
-        $connect = null;
-        error_log('config.php mysqli_connect failed: ' . $rxMysqliConnectError->getMessage());
+    // Retry several times, with exponentially increasing waits, on a
+    // transient "too many connections" (1040) error before giving up — the
+    // cron dispatcher fires several worker scripts in parallel every minute,
+    // and now CubePay's own callbacks add extra momentary connection load
+    // too, so brief spikes against a low shared-hosting connection cap are
+    // common. Worst case here is ~6.2s total, safely under CubePay's own
+    // 10s callback timeout.
+    $rxMysqliMaxAttempts = 6;
+    $rxMysqliWaitMs = 200;
+    for ($rxMysqliAttempt = 1; $rxMysqliAttempt <= $rxMysqliMaxAttempts; $rxMysqliAttempt++) {
+        try {
+            $connect = @mysqli_connect('localhost', $usernamedb, $passworddb, $dbname);
+        } catch (\Throwable $rxMysqliConnectError) {
+            $connect = null;
+        }
+        if ($connect instanceof mysqli) {
+            break;
+        }
+        $rxMysqliErrno = function_exists('mysqli_connect_errno') ? mysqli_connect_errno() : 0;
+        if ($rxMysqliErrno === 1040 && $rxMysqliAttempt < $rxMysqliMaxAttempts) {
+            usleep($rxMysqliWaitMs * 1000);
+            $rxMysqliWaitMs *= 2;
+            continue;
+        }
+        break;
+    }
+    if (!($connect instanceof mysqli)) {
+        error_log('config.php mysqli_connect failed: ' . (function_exists('mysqli_connect_error') ? mysqli_connect_error() : 'unknown error'));
     }
     if ($connect instanceof mysqli) {
         @mysqli_set_charset($connect, 'utf8mb4');
@@ -32,11 +55,24 @@ if ($dbname !== '' && $usernamedb !== '') {
     }
 
     $dsn = 'mysql:host=localhost;dbname=' . $dbname . ';charset=utf8mb4';
-    try {
-        $pdo = new PDO($dsn, $usernamedb, $passworddb, $options);
-    } catch (\PDOException $rxPdoError) {
-        $pdo = null;
-        error_log('config.php PDO connection failed: ' . $rxPdoError->getMessage());
+    $rxPdoMaxAttempts = 6;
+    $rxPdoWaitMs = 200;
+    for ($rxPdoAttempt = 1; $rxPdoAttempt <= $rxPdoMaxAttempts; $rxPdoAttempt++) {
+        try {
+            $pdo = new PDO($dsn, $usernamedb, $passworddb, $options);
+            break;
+        } catch (\PDOException $rxPdoError) {
+            $pdo = null;
+            $rxIsTooMany = (strpos($rxPdoError->getMessage(), '1040') !== false)
+                || (stripos($rxPdoError->getMessage(), 'too many connections') !== false);
+            if ($rxIsTooMany && $rxPdoAttempt < $rxPdoMaxAttempts) {
+                usleep($rxPdoWaitMs * 1000);
+                $rxPdoWaitMs *= 2;
+                continue;
+            }
+            error_log('config.php PDO connection failed: ' . $rxPdoError->getMessage());
+            break;
+        }
     }
 } else {
     $rxInstallerPending = is_file(__DIR__ . DIRECTORY_SEPARATOR . 'installer' . DIRECTORY_SEPARATOR . 'index.php');
@@ -51,10 +87,10 @@ if ($dbname !== '' && $usernamedb !== '') {
     unset($rxInstallerPending);
 }
 
-$APIKEY                     = '';
-$adminnumber                = '';
-$domainhosts                = '';
-$usernamebot                = '';
+$APIKEY                     = '8647796749:AAG0F0Br01vhyvMc6bY1cdquLHj-u3zTir0';
+$adminnumber                = '7580961460';
+$domainhosts                = 'alirezapc.ir/Foxima/Faoxima-0.0.2';
+$usernamebot                = 'Cubevvpn_bot';
 $telegramCurlTimeout        = 10;
 $telegramStrictIpValidation = true;
 $domainhosts                = rtrim(preg_replace('#^https?://#', '', $domainhosts), '/');
