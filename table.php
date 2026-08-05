@@ -320,6 +320,9 @@ try {
         addFieldToTable("setting", "bulkbuy", "onbulk", "VARCHAR(100)");
         addFieldToTable("setting", "statuscategorygenral", "offcategorys", "VARCHAR(100)");
         addFieldToTable("setting", "cronvolumere", "5", "VARCHAR(100)");
+        // [FEATURE] تعداد روز نگهداری سفارش‌های حذف‌شده (removevolume / removeTime)
+        // قبل از پاک شدن خودکار از دیتابیس. مقدار 0 یعنی غیرفعال (رفتار قبلی).
+        addFieldToTable("setting", "purgeremoveddays", "0", "VARCHAR(100)");
         addFieldToTable("setting", "agentreqprice", "0", "VARCHAR(100)");
         addFieldToTable("setting", "statusnamecustom", "offnamecustom", "VARCHAR(100)");
         addFieldToTable("setting", "id_support", "0", "VARCHAR(100)");
@@ -670,6 +673,12 @@ try {
         $Check_filde = $connect->query("SHOW COLUMNS FROM invoice LIKE 'Status'");
         if (mysqli_num_rows($Check_filde) != 1) {
             $result = $connect->query("ALTER TABLE invoice ADD Status VARCHAR(100)");
+        }
+        // [FEATURE] پاکسازی خودکار سفارش‌های حذف‌شده: لحظه‌ای که کرون سرویس را حذف
+        // می‌کند اینجا مهر زمانی می‌خورد تا بعداً بشود بر اساس آن ردیف را پاک کرد.
+        $Check_filde = $connect->query("SHOW COLUMNS FROM invoice LIKE 'removed_at'");
+        if (mysqli_num_rows($Check_filde) != 1) {
+            $result = $connect->query("ALTER TABLE invoice ADD removed_at VARCHAR(100) NULL");
         }
     }
 } catch (Exception $e) {

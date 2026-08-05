@@ -66,6 +66,71 @@ class ServiceMonitor
         }
     }
 
+    /**
+     * پاکسازی خودکار سفارش‌هایی که کرون قبلاً حذفشون کرده.
+     *
+     * وقتی حجم یا زمان سرویس تموم می‌شه، کرون کانفیگ رو از پنل حذف می‌کنه و وضعیت
+     * فاکتور رو removevolume / removeTime می‌ذاره — ولی ردیف تا ابد توی دیتابیس
+     * می‌موند و فقط با «بهینه سازی ربات» دستی پاک می‌شد. این متد بعد از سپری شدن
+     * تعداد روزِ تنظیم‌شده (setting.purgeremoveddays) ردیف رو پاک می‌کنه.
+     *
+     * مقدار 0 (پیش‌فرض) یعنی غیرفعال؛ یعنی رفتار قبلی حفظ می‌شه مگر ادمین خودش
+     * عددی تنظیم کنه — چون این عملیات برگشت‌ناپذیره و روی آمار فروش اثر می‌ذاره.
+     */
+    public function purgeRemovedInvoices()
+    {
+        $retentionDays = intval($this->setting['purgeremoveddays'] ?? 0);
+        if ($retentionDays <= 0) return;
+
+        $cutoff = time() - ($retentionDays * self::SECONDS_PER_DAY);
+
+        // فاکتورهای قدیمی که قبل از این قابلیت حذف شدن removed_at ندارن. برای اون‌ها
+        // time_cron جایگزین معتبریه: کرون فقط فاکتورهای «فعال» رو می‌خونه، پس لحظه‌ای
+        // که وضعیت به removevolume تغییر کرده، time_cron هم روی همون زمان ثابت مونده.
+        $QUERY = "SELECT id_invoice, username, Service_location FROM invoice
+                  WHERE Status IN ('removevolume', 'removeTime')
+                    AND COALESCE(NULLIF(removed_at, ''), NULLIF(time_cron, ''), '0') + 0 > 0
+                    AND COALESCE(NULLIF(removed_at, ''), NULLIF(time_cron, ''), '0') + 0 <= :cutoff
+                  LIMIT 200";
+        try {
+            $stmt = $this->pdo->prepare($QUERY);
+            // حتماً به‌صورت عددی بایند شود: اگر به‌عنوان رشته برود، مقایسه‌ی
+            // «عدد <= رشته» انجام می‌شود و فیلتر مهلت نگهداری بی‌اثر می‌شود.
+            $stmt->bindValue(':cutoff', $cutoff, PDO::PARAM_INT);
+            $stmt->execute();
+            $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
+        } catch (Throwable $e) {
+            error_log('[notifications] purgeRemovedInvoices select failed: ' . $e->getMessage());
+            return;
+        }
+        if (empty($rows)) return;
+
+        $deleted = 0;
+        $deleteStmt = $this->pdo->prepare("DELETE FROM invoice WHERE id_invoice = :id");
+        foreach ($rows as $row) {
+            try {
+                $deleteStmt->execute([':id' => $row['id_invoice']]);
+                $deleted += $deleteStmt->rowCount();
+            } catch (Throwable $e) {
+                error_log('[notifications] purgeRemovedInvoices delete failed for ' . $row['id_invoice'] . ': ' . $e->getMessage());
+            }
+        }
+        if ($deleted > 0) {
+            if (function_exists('clearSelectCache')) clearSelectCache('invoice');
+            $sample = array_slice(array_column($rows, 'username'), 0, 10);
+            $sampleText = implode("\n", array_map(function ($u) {
+                return "• <code>{$u}</code>";
+            }, $sample));
+            if (count($rows) > count($sample)) {
+                $sampleText .= "\n• …";
+            }
+            $this->sendReportNotification("🗑 پاکسازی خودکار سفارش‌های حذف‌شده\n\n"
+                . "تعداد پاک‌شده از دیتابیس : {$deleted}\n"
+                . "مهلت نگهداری : {$retentionDays} روز\n\n"
+                . $sampleText);
+        }
+    }
+
 
     private function getActiveInvoices()
     {
@@ -141,6 +206,8 @@ class ServiceMonitor
         $remainingVolume = formatBytes($userData['data_limit'] - $userData['used_traffic']);
         if ($result) {
             update("invoice", "status", "removeTime", "id_invoice", $invoice['id_invoice']);
+            // مهر زمان حذف، مبنای پاکسازی خودکار بعدی (purgeRemovedInvoices).
+            update("invoice", "removed_at", time(), "id_invoice", $invoice['id_invoice']);
             $this->Panel->RemoveUser($invoice['Service_location'], $username);
             $message = "📌 کاربر گرامی بدلیل عدم تمدید، سرویس {$invoice['username']} از لیست سرویس های شما حذف گردید\n\n🌟 جهت تهیه سرویس جدید از بخش خرید سرویس اقدام فرمایید";
             $reportMessage = "📌 اطلاعیه کرون حذف\n\nنام کاربری سرویس :‌ <code>{$invoice['username']}</code>\nوضعیت سرویس : $statusText\nتعداد روز باقی مانده ‌:‌$daysRemaining\nحجم باقی مانده : $remainingVolume";
@@ -179,6 +246,8 @@ class ServiceMonitor
         $remainingVolume = formatBytes($userData['data_limit'] - $userData['used_traffic']);
         if ($result) {
             update("invoice", "status", "removevolume", "id_invoice", $invoice['id_invoice']);
+            // مهر زمان حذف، مبنای پاکسازی خودکار بعدی (purgeRemovedInvoices).
+            update("invoice", "removed_at", time(), "id_invoice", $invoice['id_invoice']);
             $this->Panel->RemoveUser($invoice['Service_location'], $username);
             $message = "📌 کاربر گرامی بدلیل عدم تمدید، سرویس $username از لیست سرویس های شما حذف گردید
 
@@ -276,4 +345,5 @@ class ServiceMonitor
 
 $volumeMonitor = new ServiceMonitor();
 $volumeMonitor->RunNotifactions();
+$volumeMonitor->purgeRemovedInvoices();
 

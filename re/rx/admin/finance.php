@@ -3132,6 +3132,32 @@ n2", $backadmin, 'HTML');
     nm_adminInstantReply($from_id, $textbotlang['Admin']['cronjob']['changeddata'], $setting_panel, 'HTML');
     step("home", $from_id);
     update("setting", "cronvolumere", $text);
+} elseif ($datain == "setpurgeremoveddays" && $adminrulecheck['rule'] == "administrator") {
+    // [FEATURE] پاکسازی خودکار سفارش‌های حذف‌شده از دیتابیس ربات.
+    $purgecurrent = intval($setting['purgeremoveddays'] ?? 0);
+    $purgestatus = $purgecurrent > 0 ? "{$purgecurrent} روز" : "غیرفعال";
+    nm_adminInstantReply($from_id, "🗑 پاکسازی خودکار سفارش‌های حذف‌شده
+
+سرویس‌هایی که به‌خاطر اتمام حجم یا زمان توسط کرون از پنل حذف شده‌اند (وضعیت removevolume و removeTime)، تا ابد در دیتابیس ربات باقی می‌مانند.
+
+📌 تعداد روزی که می‌خواهید این سفارش‌ها پس از حذف شدن نگه داشته شوند را ارسال کنید. بعد از این مدت، ردیف آن‌ها به‌صورت خودکار از دیتابیس پاک می‌شود.
+
+⚠️ عدد 0 یعنی غیرفعال (سفارش‌ها دست‌نخورده می‌مانند).
+⚠️ این عملیات برگشت‌ناپذیر است و سفارش‌های پاک‌شده از آمار حساب می‌افتند.
+
+وضعیت فعلی : {$purgestatus}", $backadmin, 'HTML');
+    step("getpurgeremoveddays", $from_id);
+} elseif ($user['step'] == "getpurgeremoveddays") {
+    if (!ctype_digit($text)) {
+        nm_adminInstantReply($from_id, $textbotlang['Admin']['agent']['invalidvlue'], $backadmin, 'HTML');
+        return;
+    }
+    update("setting", "purgeremoveddays", $text);
+    step("home", $from_id);
+    $purgemsg = intval($text) > 0
+        ? "✅ سفارش‌های حذف‌شده پس از {$text} روز به‌صورت خودکار از دیتابیس پاک می‌شوند."
+        : "✅ پاکسازی خودکار غیرفعال شد؛ سفارش‌های حذف‌شده در دیتابیس باقی می‌مانند.";
+    nm_adminInstantReply($from_id, $purgemsg, $setting_panel, 'HTML');
 } elseif ($datain == "setting_on_holdcron" && $adminrulecheck['rule'] == "administrator") {
     nm_adminInstantReply($from_id, "در این بخش باید تغیین کنید که اگر کاربر بعد از چند روز به کانفیگ خود وصل نشد و در وضعیت on_hold بود به کاربر پیام دهد" . $setting['on_hold_day'] . "روز", $backadmin, 'HTML');
     step("on_hold_day", $from_id);
