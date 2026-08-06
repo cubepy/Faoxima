@@ -321,8 +321,8 @@ try {
         addFieldToTable("setting", "statuscategorygenral", "offcategorys", "VARCHAR(100)");
         addFieldToTable("setting", "cronvolumere", "5", "VARCHAR(100)");
         // [FEATURE] تعداد روز نگهداری سفارش‌های حذف‌شده (removevolume / removeTime)
-        // قبل از پاک شدن خودکار از دیتابیس. مقدار 0 یعنی غیرفعال (رفتار قبلی).
-        addFieldToTable("setting", "purgeremoveddays", "0", "VARCHAR(100)");
+        // قبل از پاک شدن خودکار از دیتابیس. مقدار 0 یعنی غیرفعال.
+        addFieldToTable("setting", "purgeremoveddays", "30", "VARCHAR(100)");
         addFieldToTable("setting", "agentreqprice", "0", "VARCHAR(100)");
         addFieldToTable("setting", "statusnamecustom", "offnamecustom", "VARCHAR(100)");
         addFieldToTable("setting", "id_support", "0", "VARCHAR(100)");
