@@ -79,9 +79,8 @@ if ($user['step'] == "createusertest" || preg_match('/locationtest_(.*)/', $data
     $username_ac = generateUsername($from_id, $marzban_list_get['MethodUsername'], $user['username'], $randomString, $text, $marzban_list_get['namecustom'], $user['namecustom']);
     $username_ac = strtolower($username_ac);
     $DataUserOut = $ManagePanel->DataUser($marzban_list_get['name_panel'], $username_ac);
-    $random_number = rand(1000000, 9999999);
     if (isset($DataUserOut['username']) || in_array($username_ac, $usernameinvoice)) {
-        $username_ac = $random_number . "_" . $username_ac;
+        $username_ac = rxResolveUsernameCollision($marzban_list_get, $username_ac, $usernameinvoice, $from_id);
     }
     $datac = array(
         'expire' => strtotime(date("Y-m-d H:i:s", strtotime("+" . $marzban_list_get['time_usertest'] . "hours"))),
@@ -1102,9 +1101,8 @@ $textinvite
     $username_ac = generateUsername($from_id, $marzban_list_get['MethodUsername'], $username, $randomString, $text, $marzban_list_get['namecustom'], $user['namecustom']);
     $username_ac = strtolower($username_ac);
     $DataUserOut = $ManagePanel->DataUser($marzban_list_get['name_panel'], $username_ac);
-    $random_number = rand(1000000, 9999999);
     if (isset($DataUserOut['username']) || in_array($username_ac, $usernameinvoice)) {
-        $username_ac = $random_number . "_" . $username_ac;
+        $username_ac = rxResolveUsernameCollision($marzban_list_get, $username_ac, $usernameinvoice, $from_id);
     }
     if (isset($username_ac))
         update("user", "Processing_value_tow", $username_ac, "id", $from_id);
@@ -1209,8 +1207,15 @@ $textinvite
     $username_ac = strtolower($user['Processing_value_tow']);
     $DataUserOut = $ManagePanel->DataUser($marzban_list_get['name_panel'], $username_ac);
     if (isset($DataUserOut['username']) || in_array($username_ac, $usernameinvoice)) {
-        sendmessage($from_id, "❌ لطفا مراحل خرید را مجددا انجام دهید", null, 'HTML');
-        return;
+        // Someone else claimed this name between preview and confirm. For a
+        // user-picked name we still have to ask again; for generated names,
+        // resolve to the next free one instead of dead-ending the purchase.
+        if ($marzban_list_get['MethodUsername'] == "نام کاربری دلخواه") {
+            sendmessage($from_id, "❌ لطفا مراحل خرید را مجددا انجام دهید", null, 'HTML');
+            return;
+        }
+        $username_ac = rxResolveUsernameCollision($marzban_list_get, $username_ac, $usernameinvoice, $from_id);
+        update("user", "Processing_value_tow", $username_ac, "id", $from_id);
     }
     $date = time();
     $randomString = bin2hex(random_bytes(4));
@@ -2042,7 +2047,14 @@ $textonebuy
         $random_number = rand(1000000, 9999999);
         $username_acc = $username_ac . "_" . $i;
         if (isset($usernameinvoice) && is_array($usernameinvoice) && in_array($username_acc, $usernameinvoice)) {
-            $username_acc = $random_number . "_" . $username_acc;
+            // Suffix instead of the old random 7-digit prefix so bulk names
+            // stay readable and keep their common base for sorting.
+            $rxBulkTry = 0;
+            do {
+                $rxBulkCandidate = $username_acc . "_" . rand(100, 999);
+                $rxBulkTry++;
+            } while (in_array($rxBulkCandidate, $usernameinvoice) && $rxBulkTry < 20);
+            $username_acc = in_array($rxBulkCandidate, $usernameinvoice) ? ($username_acc . "_" . $random_number) : $rxBulkCandidate;
         }
         $randomString = bin2hex(random_bytes(4));
         if (in_array($randomString, $id_invoice)) {

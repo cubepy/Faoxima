@@ -621,6 +621,60 @@ function generateUsername($from_id, $Metode, $username, $randomString, $text, $n
         return $usernamecustom . "_" . $user['number_username'];
     }
 }
+function rxUsernameTaken($name_panel, $candidate, $usernameinvoice)
+{
+    global $ManagePanel;
+    if (is_array($usernameinvoice) && in_array($candidate, $usernameinvoice)) {
+        return true;
+    }
+    try {
+        $panelManager = (isset($ManagePanel) && $ManagePanel instanceof ManagePanel) ? $ManagePanel : new ManagePanel();
+        $DataUserOut = $panelManager->DataUser($name_panel, $candidate);
+    } catch (Throwable $rxTakenErr) {
+        // If the panel cannot be queried, assume taken — a duplicate name on
+        // the panel is worse than skipping one counter value.
+        return true;
+    }
+    return isset($DataUserOut['username']);
+}
+function rxResolveUsernameCollision($marzban_list_get, $username_ac, $usernameinvoice, $from_id)
+{
+    // The sequential counters (numbercount / number_username) only advance
+    // after a *successful* purchase, while every started purchase already
+    // inserts an 'unpaid' invoice row holding the generated username. Any
+    // abandoned/unpaid order therefore keeps its username occupied, the next
+    // buyer collides, and the old code prepended rand(1000000,9999999)_ —
+    // producing names like 7098859_cubevip_599. Instead, advance the counter
+    // to the next free value so names stay clean (cubevip_600, cubevip_601…).
+    $method = $marzban_list_get['MethodUsername'] ?? '';
+    $panelName = $marzban_list_get['name_panel'] ?? '';
+    $globalSeq = in_array($method, ["متن دلخواه + عدد ترتیبی", "متن دلخواه نماینده + عدد ترتیبی"]);
+    $userSeq = in_array($method, ["نام کاربری + عدد به ترتیب", "آیدی عددی+عدد ترتیبی"]);
+    if (($globalSeq || $userSeq) && preg_match('/^(.*)_(\d+)$/', $username_ac, $rxParts)) {
+        $base = $rxParts[1];
+        $number = intval($rxParts[2]);
+        for ($i = 1; $i <= 30; $i++) {
+            $candidate = strtolower($base . "_" . ($number + $i));
+            if (!rxUsernameTaken($panelName, $candidate, $usernameinvoice)) {
+                if ($globalSeq) {
+                    update("setting", "numbercount", $number + $i);
+                } else {
+                    update("user", "number_username", $number + $i, "id", $from_id);
+                }
+                return $candidate;
+            }
+        }
+    }
+    // Non-sequential methods (or 30 consecutive taken values): append a short
+    // random suffix — still readable, and never a digit-prefixed name.
+    for ($i = 0; $i < 10; $i++) {
+        $candidate = strtolower($username_ac . "_" . rand(100, 999));
+        if (!rxUsernameTaken($panelName, $candidate, $usernameinvoice)) {
+            return $candidate;
+        }
+    }
+    return strtolower($username_ac . "_" . rand(1000000, 9999999));
+}
 function outputlunk($text)
 {
     $ch = curl_init();

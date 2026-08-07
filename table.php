@@ -320,6 +320,9 @@ try {
         addFieldToTable("setting", "bulkbuy", "onbulk", "VARCHAR(100)");
         addFieldToTable("setting", "statuscategorygenral", "offcategorys", "VARCHAR(100)");
         addFieldToTable("setting", "cronvolumere", "5", "VARCHAR(100)");
+        // [FEATURE] تعداد روز نگهداری سفارش‌های حذف‌شده (removevolume / removeTime)
+        // قبل از پاک شدن خودکار از دیتابیس. مقدار 0 یعنی غیرفعال.
+        addFieldToTable("setting", "purgeremoveddays", "30", "VARCHAR(100)");
         addFieldToTable("setting", "agentreqprice", "0", "VARCHAR(100)");
         addFieldToTable("setting", "statusnamecustom", "offnamecustom", "VARCHAR(100)");
         addFieldToTable("setting", "id_support", "0", "VARCHAR(100)");
@@ -577,7 +580,8 @@ try {
         inbounds TEXT NULL,
         proxies TEXT NULL,
         category varchar(400) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci NULL,
-        hide_panel TEXT  NOT NULL)
+        hide_panel TEXT  NOT NULL,
+        limit_ip INT NOT NULL DEFAULT 0)
         ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE utf8mb4_unicode_ci");
         if (!$result) {
             error_log("[table.php] table product: " . mysqli_error($connect));
@@ -593,6 +597,8 @@ try {
         addFieldToTable("product", "data_limit_reset", "no_reset", "varchar(100)");
         addFieldToTable("product", "agent", "f", "varchar(50)");
         addFieldToTable("product", "code_product", null, "varchar(50)");
+        // [FEATURE] محدودیت واقعی IP هم‌زمان روی پنل‌های x-ui/3x-ui توکنی (fail2ban).
+        addFieldToTable("product", "limit_ip", "0", "INT");
     }
 } catch (Exception $e) {
     error_log('[panels] ' . $e->getMessage());
@@ -667,6 +673,12 @@ try {
         $Check_filde = $connect->query("SHOW COLUMNS FROM invoice LIKE 'Status'");
         if (mysqli_num_rows($Check_filde) != 1) {
             $result = $connect->query("ALTER TABLE invoice ADD Status VARCHAR(100)");
+        }
+        // [FEATURE] پاکسازی خودکار سفارش‌های حذف‌شده: لحظه‌ای که کرون سرویس را حذف
+        // می‌کند اینجا مهر زمانی می‌خورد تا بعداً بشود بر اساس آن ردیف را پاک کرد.
+        $Check_filde = $connect->query("SHOW COLUMNS FROM invoice LIKE 'removed_at'");
+        if (mysqli_num_rows($Check_filde) != 1) {
+            $result = $connect->query("ALTER TABLE invoice ADD removed_at VARCHAR(100) NULL");
         }
     }
 } catch (Exception $e) {
