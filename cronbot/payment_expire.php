@@ -160,11 +160,48 @@ foreach ($rows as $result) {
     //
     // نگه داشتن ردیف با وضعیت 'expire' هزینه‌ای ندارد: مسیر ارسال رسید فقط
     // فاکتورهای 'paid' را رد می‌کند، پس مشتری هنوز می‌تواند رسیدش را بفرستد و
-    // ادمین تصمیم بگیرد. پاکسازی هم از قبل وجود دارد: دکمه‌ی «بهینه سازی ربات»
-    // در پنل ادمین همه‌ی ردیف‌های 'expire' و 'reject' را یکجا حذف می‌کند.
+    // ادمین تصمیم بگیرد. پاکسازی هم انجام می‌شود، فقط با تاخیر: بلوکِ انتهای همین
+    // فایل بعد از setting.purgepaymentdays روز آن‌ها را خودکار حذف می‌کند، و دکمه‌ی
+    // «بهینه سازی ربات» هم مثل قبل دستی همه را یکجا پاک می‌کند.
     if (function_exists('rx_release_unpaid_discount')) {
         $rxRefTime = isValidDate($result['time'] ?? '') ? strtotime(str_replace('/', '-', (string)$result['time'])) : null;
         rx_release_unpaid_discount((string)$result['id_user'], null, $rxRefTime ?: null);
     }
     deletemessage($result['id_user'], $result['message_id']);
+}
+
+/**
+ * پاکسازی خودکار فاکتورهای منقضی/ردشده.
+ *
+ * ردیف‌های 'expire' و 'reject' دیگر کاری با آن‌ها نیست، ولی چند روزی نگه داشته
+ * می‌شوند تا اگر مشتری با رسیدِ دیرهنگام برگشت، فاکتورش هنوز موجود باشد. بعد از
+ * setting.purgepaymentdays روز (پیش‌فرض ۷) خودکار حذف می‌شوند.
+ *
+ * فقط 'expire' و 'reject' — فاکتورهای 'paid' و 'waiting' (که رسید فرستاده شده و
+ * منتظر بررسی ادمین‌اند) هیچ‌وقت اینجا لمس نمی‌شوند.
+ */
+try {
+    $rxPurgeSetting = select("setting", "*", null, null, "select");
+    $rxPurgeDays = intval($rxPurgeSetting['purgepaymentdays'] ?? 7);
+    if ($rxPurgeDays > 0) {
+        // ستون time با فرمت 'Y/m/d H:i:s' ذخیره می‌شود و صفر-پد است، پس مقایسه‌ی
+        // رشته‌ای همان ترتیب زمانی را می‌دهد — دقیقاً مثل کوئری انقضای بالا.
+        $rxPurgeCutoff = date('Y/m/d H:i:s', time() - ($rxPurgeDays * 86400));
+        $rxPurgeStmt = $pdo->prepare(
+            "DELETE FROM Payment_report
+              WHERE payment_Status IN ('expire', 'reject')
+                AND time < :cutoff
+              LIMIT 500"
+        );
+        $rxPurgeStmt->execute([':cutoff' => $rxPurgeCutoff]);
+        $rxPurged = $rxPurgeStmt->rowCount();
+        if ($rxPurged > 0) {
+            if (function_exists('clearSelectCache')) {
+                clearSelectCache('Payment_report');
+            }
+            error_log('[payment_expire] purged ' . $rxPurged . ' expired/rejected payment rows older than ' . $rxPurgeDays . ' days');
+        }
+    }
+} catch (Throwable $rxPurgeError) {
+    error_log('[payment_expire] purge failed: ' . $rxPurgeError->getMessage());
 }

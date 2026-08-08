@@ -1,5 +1,16 @@
 <?php
 
+// [FIX] nm_safe_direct_payment() (used below by the manual "confirm card-to-card payment"
+// and "retry stuck order" admin actions) lives in lib/SafeDirectPayment.php. finance.php also
+// requires it, but finance.php's own if/elseif chain is concatenated AFTER this file's in the
+// admin manifest — so relying on that alone would leave it undefined for this file's branches.
+if (!function_exists('nm_safe_direct_payment')) {
+    $__nmSafeDirectPaymentLib = (defined('REFACTORED_LEGACY_ROOT') ? REFACTORED_LEGACY_ROOT : dirname(__DIR__, 3)) . '/lib/SafeDirectPayment.php';
+    if (is_file($__nmSafeDirectPaymentLib)) {
+        require_once $__nmSafeDirectPaymentLib;
+    }
+}
+
 if (!function_exists('rx_featCategoryRows')) {
     function rx_featCategoryRows($cat)
     {
@@ -118,7 +129,10 @@ if (!function_exists('rx_featCategoryRows')) {
                  ['text' => "❌ کرون حذف حجم", 'callback_data' => "none"]],
                 [['text' => "⚙️ مهلت نگهداری", 'callback_data' => "setpurgeremoveddays"],
                  ['text' => (intval($setting['purgeremoveddays'] ?? 0) > 0 ? "{$setting['purgeremoveddays']} روز" : "غیرفعال"), 'callback_data' => "setpurgeremoveddays"],
-                 ['text' => "🗑 پاکسازی دیتابیس", 'callback_data' => "none"]],
+                 ['text' => "🗑 پاکسازی سفارش‌ها", 'callback_data' => "none"]],
+                [['text' => "⚙️ مهلت نگهداری", 'callback_data' => "setpurgepaymentdays"],
+                 ['text' => (intval($setting['purgepaymentdays'] ?? 0) > 0 ? "{$setting['purgepaymentdays']} روز" : "غیرفعال"), 'callback_data' => "setpurgepaymentdays"],
+                 ['text' => "🧾 پاکسازی فاکتورها", 'callback_data' => "none"]],
                 [['text' => "⚙️ مدیریت", 'callback_data' => "cronjobs_settings"],
                  ['text' => "⏱ نمایش لیست", 'callback_data' => "cronjobs_settings"],
                  ['text' => "زمان‌بندی کرون‌ها", 'callback_data' => "none"]],
@@ -596,7 +610,7 @@ if (in_array($text, $textadmin) || $datain == "admin") {
     $stmt->bindParam(':rule', $text, PDO::PARAM_STR);
     $stmt->execute();
     $text_report = sprintf($textbotlang['Admin']['reportgroup']['adminadded'], $username, $from_id, $text, $user['Processing_value']);
-    if (strlen($setting['Channel_Report']) > 0) {
+    if (reportChannelIsSet($setting)) {
         telegram('sendmessage', [
             'chat_id' => $setting['Channel_Report'],
             'message_thread_id' => $otherreport,
@@ -4509,6 +4523,7 @@ $caption";
         return;
     }
     savedata("clear", "name_product", $text);
+    savedata("save", "limit_ip", "0");
     nm_adminInstantReply($from_id, $textbotlang['Admin']['agent']['setagentproduct'], rx_agentGroupKeyboard(false), 'HTML');
     step('get_agent', $from_id);
 } elseif ($user['step'] == "get_agent") {
@@ -4607,11 +4622,30 @@ $caption";
         return;
     }
     savedata("save", "data_limit_reset", "no_reset");
+    // [FEATURE] محدودیت واقعی IP هم‌زمان: فقط روی پنل‌های x-ui/3x-ui در حالت توکنی معنا داره.
+    if ($panelType === "x-ui_single" && xui_panel_uses_token($panel)) {
+        $fail2banNote = "";
+        $fb = xui_fail2ban_status($panel);
+        if (is_array($fb) && !empty($fb['ok']) && empty($fb['usable'])) {
+            $fail2banNote = "\n\n⚠️ توجه: fail2ban روی این پنل نصب/فعال نیست، بنابراین این محدودیت فقط ثبت می‌شود ولی توسط پنل عملاً اجرا نمی‌شود.";
+        }
+        nm_adminInstantReply($from_id, "🔢 حداکثر تعداد اتصال هم‌زمان (IP) برای این محصول را وارد کنید.\nعدد 0 یعنی نامحدود." . $fail2banNote, $backadmin, 'HTML');
+        step('getlimitip', $from_id);
+        return;
+    }
     nm_adminInstantReply($from_id, " 🗒 یادداشت را برای محصول ارسال کنید. این یادداشت در پیش فاکتور کاربر نشان داده می شود.", $backadmin, 'HTML');
     step('endstep', $from_id);
 } elseif ($user['step'] == "getnote") {
     savedata("save", "data_limit_reset", $text);
     nm_adminInstantReply($from_id, " 🗒 یادداشت را برای محصول ارسال کنید.این یادداشت در پیش فاکتور کاربر نشان داده می شود.", $backadmin, 'HTML');
+    step('endstep', $from_id);
+} elseif ($user['step'] == "getlimitip") {
+    if (!ctype_digit($text)) {
+        nm_adminInstantReply($from_id, "❌ لطفاً یک عدد صحیح وارد کنید (0 یعنی نامحدود).", $backadmin, 'HTML');
+        return;
+    }
+    savedata("save", "limit_ip", $text);
+    nm_adminInstantReply($from_id, " 🗒 یادداشت را برای محصول ارسال کنید. این یادداشت در پیش فاکتور کاربر نشان داده می شود.", $backadmin, 'HTML');
     step('endstep', $from_id);
 } elseif ($user['step'] == "endstep") {
     $userdata = json_decode($user['Processing_value'], true);
@@ -4619,7 +4653,8 @@ $caption";
     $varhide_panel = "{}";
     if (!isset($userdata['category']))
         $userdata['category'] = null;
-    $stmt = $pdo->prepare("INSERT IGNORE INTO product (name_product,code_product,price_product,Volume_constraint,Service_time,Location,agent,data_limit_reset,note,category,hide_panel,one_buy_status) VALUES (:name_product,:code_product,:price_product,:Volume_constraint,:Service_time,:Location,:agent,:data_limit_reset,:note,:category,:hide_panel,'0')");
+    $limitIpValue = isset($userdata['limit_ip']) && ctype_digit((string) $userdata['limit_ip']) ? (int) $userdata['limit_ip'] : 0;
+    $stmt = $pdo->prepare("INSERT IGNORE INTO product (name_product,code_product,price_product,Volume_constraint,Service_time,Location,agent,data_limit_reset,note,category,hide_panel,one_buy_status,limit_ip) VALUES (:name_product,:code_product,:price_product,:Volume_constraint,:Service_time,:Location,:agent,:data_limit_reset,:note,:category,:hide_panel,'0',:limit_ip)");
     $stmt->bindParam(':name_product', $userdata['name_product']);
     $stmt->bindParam(':code_product', $randomString);
     $stmt->bindParam(':price_product', $userdata['price_product']);
@@ -4631,6 +4666,7 @@ $caption";
     $stmt->bindParam(':category', $userdata['category'], PDO::PARAM_STR);
     $stmt->bindParam(':note', $text, PDO::PARAM_STR);
     $stmt->bindParam(':hide_panel', $varhide_panel, PDO::PARAM_STR);
+    $stmt->bindParam(':limit_ip', $limitIpValue, PDO::PARAM_INT);
     $stmt->execute();
     nm_adminInstantReply($from_id, $textbotlang['Admin']['Product']['SaveProduct'], $shopkeyboard, 'HTML');
     step('home', $from_id);
@@ -4656,6 +4692,29 @@ $caption";
     nm_adminInstantReply($from_id, $textbotlang['users']['selectoption'], $setting_panel, 'HTML');
 } elseif ($text == "🤙 بخش پشتیبانی" && $adminrulecheck['rule'] == "administrator") {
     nm_adminInstantReply($from_id, $textbotlang['users']['selectoption'], $supportcenter, 'HTML');
+} elseif (preg_match('/^cardauth_(ok|no)_(\w+)_(\w+)/', $datain, $dataget) && ($adminrulecheck['rule'] == "administrator" || $adminrulecheck['rule'] == "Seller")) {
+    // [FEATURE] تایید/رد درخواست احراز هویت کارت‌به‌کارت (تصویر کارت بانکی کاربر).
+    $__cardAuthDecision = $dataget[1];
+    $__cardAuthUserId = $dataget[2];
+    $__cardAuthOrderCheck = $dataget[3];
+    $__cardAuthUser = select("user", "*", "id", $__cardAuthUserId, "select");
+    if (!is_array($__cardAuthUser) || ($__cardAuthUser['cardauth_status'] ?? 'none') !== 'pending' || ($__cardAuthUser['Processing_value_tow'] ?? '') !== $__cardAuthOrderCheck) {
+        telegram('answerCallbackQuery', array(
+            'callback_query_id' => $callback_query_id,
+            'text' => '⚠️ این درخواست قبلاً بررسی شده یا منقضی شده است.',
+            'show_alert' => true,
+        ));
+        return;
+    }
+    if ($__cardAuthDecision === 'ok') {
+        update("user", "cardauth_status", "verified", "id", $__cardAuthUserId);
+        sendmessage($__cardAuthUserId, "✅ هویت شما تایید شد. اکنون می‌توانید از روش پرداخت کارت‌به‌کارت استفاده کنید.", null, 'HTML');
+        Editmessagetext($from_id, $message_id, "✅ احراز هویت کاربر <code>{$__cardAuthUserId}</code> توسط ادمین <code>{$from_id}</code> تایید شد.", null);
+    } else {
+        update("user", "cardauth_status", "none", "id", $__cardAuthUserId);
+        sendmessage($__cardAuthUserId, "❌ متاسفانه احراز هویت شما رد شد. لطفاً مطمئن شوید فقط ۴ رقم آخر شماره کارت در عکس قابل مشاهده باشد و دوباره تلاش کنید.", null, 'HTML');
+        Editmessagetext($from_id, $message_id, "❌ احراز هویت کاربر <code>{$__cardAuthUserId}</code> توسط ادمین <code>{$from_id}</code> رد شد.", null);
+    }
 } elseif (preg_match('/Confirm_pay_(\w+)/', $datain, $dataget) && ($adminrulecheck['rule'] == "administrator" || $adminrulecheck['rule'] == "Seller")) {
     $order_id = $dataget[1];
     $Payment_report = select("Payment_report", "*", "id_order", $order_id, "select");
@@ -4737,7 +4796,31 @@ $caption";
         }
         return;
     }
-    DirectPayment($order_id);
+    // [FIX] Payment_report was just atomically marked 'paid' above, but DirectPayment() (panel API
+    // calls, DB writes) could still throw or come back with a soft failure (createUser/extend
+    // returning no username). Calling it bare here used to mean: if that happened, the request either
+    // crashed silently or fell straight through to the "cashback + payment approved" messaging below
+    // as if the service had actually been delivered. nm_safe_direct_payment() catches both cases and
+    // tells us which one happened.
+    $__directPaymentOk = function_exists('nm_safe_direct_payment')
+        ? nm_safe_direct_payment($order_id)
+        : (DirectPayment($order_id) !== false);
+    if (!$__directPaymentOk) {
+        $__retryRefundKb = json_encode([
+            'inline_keyboard' => [
+                [['text' => '🔄 تلاش مجدد برای ساخت سرویس', 'callback_data' => 'retryconfig_' . $order_id]],
+                [['text' => '💸 لغو سفارش و بازگشت وجه به کاربر', 'callback_data' => 'refundconfig_' . $order_id]],
+            ]
+        ]);
+        telegram('answerCallbackQuery', array(
+            'callback_query_id' => $callback_query_id,
+            'text' => '⚠️ پرداخت تایید شد اما ساخت/تحویل سرویس با خطا مواجه شد. جزئیات برای ادمین‌ها ارسال شد.',
+            'show_alert' => true,
+            'cache_time' => 5,
+        ));
+        Editmessagetext($from_id, $message_id, "⚠️ پرداخت سفارش <code>{$order_id}</code> تایید شد اما ساخت/تحویل سرویس با خطا مواجه شد.\nاز دکمه‌های زیر برای تلاش مجدد یا بازگشت وجه استفاده کنید.", $__retryRefundKb);
+        return;
+    }
     $pricecashback = select("PaySetting", "ValuePay", "NamePay", "chashbackcart", "select")['ValuePay'];
     $Balance_id = select("user", "*", "id", $Payment_report['id_user'], "select");
     if ($pricecashback != "0") {
@@ -4761,7 +4844,7 @@ $caption";
 👤 ایدی عددی کاربر : <code>{$Payment_report['id_user']}</code>
 👤 نام کاربری کاربر : @{$Balance_id['username']}
         کد پیگیری پرداحت : $order_id";
-    if (strlen($setting['Channel_Report']) > 0) {
+    if (reportChannelIsSet($setting)) {
         telegram('sendmessage', [
             'chat_id' => $setting['Channel_Report'],
             'message_thread_id' => $paymentreports,
@@ -4773,6 +4856,141 @@ $caption";
     update("user", "Processing_value_one", "none", "id", $Balance_id['id']);
     update("user", "Processing_value_tow", "none", "id", $Balance_id['id']);
     update("user", "Processing_value_four", "none", "id", $Balance_id['id']);
+
+    // آپدیت آنیِ پیامِ همهٔ ادمین‌ها؛ دیگه لازم نیست ادمین‌های دیگه خودشون رو
+    // اشتباهی روی همین رسید بزنن تا تازه بفهمن قبلاً تایید شده.
+    $rx_confirmedText = "✅ پرداخت تایید شد
+👤 شناسه کاربر: <code>{$Balance_id['id']}</code>
+🛒 کد پیگیری پرداخت: {$Payment_report['id_order']}
+⚜️ نام کاربری: @{$Balance_id['username']}
+💎 موجودی بعد از تایید : {$Balance_id['Balance']}
+💸 مبلغ پرداختی: $format_price_cart تومان
+👤 تایید شده توسط ادمین: <code>$from_id</code>";
+    $rx_confirmedKb = json_encode([
+        'inline_keyboard' => [
+            [['text' => "✅ تایید شده", 'callback_data' => "confirmpaid"]],
+            [['text' => "⚙️ مدیریت کاربر", 'callback_data' => "manageuser_" . $Payment_report['id_user']]],
+        ]
+    ]);
+    $rx_adminMsgMap = json_decode($Payment_report['admin_msgs'] ?? '', true);
+    if (is_array($rx_adminMsgMap)) {
+        foreach ($rx_adminMsgMap as $rx_otherAdminId => $rx_otherMsgId) {
+            if ((string) $rx_otherAdminId === (string) $from_id) {
+                continue;
+            }
+            Editmessagetext($rx_otherAdminId, $rx_otherMsgId, $rx_confirmedText, $rx_confirmedKb);
+        }
+    }
+    Editmessagetext($from_id, $message_id, $rx_confirmedText, $rx_confirmedKb);
+} elseif (preg_match('/retryconfig_(\w+)/', $datain, $dataget) && ($adminrulecheck['rule'] == "administrator" || $adminrulecheck['rule'] == "Seller")) {
+    $order_id = $dataget[1];
+    $Payment_report = select("Payment_report", "*", "id_order", $order_id, "select");
+    if ($Payment_report == false) {
+        telegram('answerCallbackQuery', array(
+            'callback_query_id' => $callback_query_id,
+            'text' => "تراکنش پیدا نشد",
+            'show_alert' => true,
+            'cache_time' => 5,
+        ));
+        return;
+    }
+    $rx_decNote = (string) ($Payment_report['dec_not_confirmed'] ?? '');
+    if (stripos($rx_decNote, 'auto-refund') !== false) {
+        telegram('answerCallbackQuery', array(
+            'callback_query_id' => $callback_query_id,
+            'text' => "این سفارش قبلاً لغو و وجه آن بازگردانده شده؛ امکان تلاش مجدد نیست.",
+            'show_alert' => true,
+            'cache_time' => 5,
+        ));
+        return;
+    }
+    telegram('answerCallbackQuery', array(
+        'callback_query_id' => $callback_query_id,
+        'text' => "⏳ در حال تلاش مجدد...",
+        'show_alert' => false,
+    ));
+    Editmessagetext($from_id, $message_id, "🔄 در حال تلاش مجدد برای این سفارش توسط ادمین <code>$from_id</code> ...\n\n🛒 کد سفارش: {$order_id}", null);
+    // [FIX] was calling DirectPayment() bare with no try/catch and no result check, so a second
+    // failure (still down panel, still no stock) died/finished silently and the admin never learned
+    // whether the retry actually worked.
+    $__retryOk = function_exists('nm_safe_direct_payment')
+        ? nm_safe_direct_payment($order_id)
+        : (function_exists('DirectPayment') ? (DirectPayment($order_id) !== false) : false);
+    if (!$__retryOk) {
+        $__retryRefundKb2 = json_encode([
+            'inline_keyboard' => [
+                [['text' => '🔄 تلاش مجدد برای ساخت سرویس', 'callback_data' => 'retryconfig_' . $order_id]],
+                [['text' => '💸 لغو سفارش و بازگشت وجه به کاربر', 'callback_data' => 'refundconfig_' . $order_id]],
+            ]
+        ]);
+        sendmessage($from_id, "❌ تلاش مجدد برای سفارش <code>{$order_id}</code> هم با خطا مواجه شد.", $__retryRefundKb2, 'HTML');
+    } else {
+        sendmessage($from_id, "✅ تلاش مجدد برای سفارش <code>{$order_id}</code> با موفقیت انجام شد.", null, 'HTML');
+    }
+} elseif (preg_match('/refundconfig_(\w+)/', $datain, $dataget) && ($adminrulecheck['rule'] == "administrator" || $adminrulecheck['rule'] == "Seller")) {
+    $order_id = $dataget[1];
+    $Payment_report = select("Payment_report", "*", "id_order", $order_id, "select");
+    if ($Payment_report == false) {
+        telegram('answerCallbackQuery', array(
+            'callback_query_id' => $callback_query_id,
+            'text' => "تراکنش پیدا نشد",
+            'show_alert' => true,
+            'cache_time' => 5,
+        ));
+        return;
+    }
+    $rx_decNote = (string) ($Payment_report['dec_not_confirmed'] ?? '');
+    if (stripos($rx_decNote, 'auto-refund') !== false) {
+        telegram('answerCallbackQuery', array(
+            'callback_query_id' => $callback_query_id,
+            'text' => "این سفارش قبلاً لغو و وجه آن بازگردانده شده.",
+            'show_alert' => true,
+            'cache_time' => 5,
+        ));
+        return;
+    }
+    $rx_refundUser = select("user", "*", "id", $Payment_report['id_user'], "select");
+    if ($rx_refundUser == false) {
+        telegram('answerCallbackQuery', array(
+            'callback_query_id' => $callback_query_id,
+            'text' => "کاربر پیدا نشد",
+            'show_alert' => true,
+            'cache_time' => 5,
+        ));
+        return;
+    }
+    try {
+        $rx_refundStmt = $pdo->prepare(
+            "UPDATE Payment_report SET dec_not_confirmed = CASE WHEN dec_not_confirmed IS NULL OR dec_not_confirmed = '' THEN :n1 ELSE CONCAT(dec_not_confirmed, ' | ', :n2) END WHERE id_order = :o AND (dec_not_confirmed IS NULL OR dec_not_confirmed NOT LIKE '%auto-refund%')"
+        );
+        $rx_refundNote = '[auto-refund: cancelled manually by admin ' . $from_id . ' at ' . date('Y-m-d H:i:s') . ']';
+        $rx_refundStmt->execute([':n1' => $rx_refundNote, ':n2' => $rx_refundNote, ':o' => $order_id]);
+        if ($rx_refundStmt->rowCount() === 0) {
+            telegram('answerCallbackQuery', array(
+                'callback_query_id' => $callback_query_id,
+                'text' => "این سفارش همین الان توسط یه ادمین دیگه پردازش شد.",
+                'show_alert' => true,
+                'cache_time' => 5,
+            ));
+            return;
+        }
+        $rx_newBalance = (float) $rx_refundUser['Balance'] + (float) $Payment_report['price'];
+        $rx_balStmt = $pdo->prepare("UPDATE user SET Balance = :b WHERE id = :u");
+        $rx_balStmt->execute([':b' => $rx_newBalance, ':u' => $rx_refundUser['id']]);
+    } catch (Throwable $rx_refundErr) {
+        if (function_exists('rx_log_event')) {
+            rx_log_event('ADMIN_REFUND_CONFIG_ERROR', 'refundconfig failed', ['order' => $order_id, 'err' => $rx_refundErr->getMessage()]);
+        }
+        return;
+    }
+    $rx_formattedRefund = number_format($Payment_report['price']);
+    sendmessage($rx_refundUser['id'], "❌ سفارش شما (کد پیگیری: {$order_id}) به دلیل مشکل ارتباط با سرور لغو شد و مبلغ {$rx_formattedRefund} تومان به کیف پول شما بازگردانده شد.", null, 'HTML');
+    telegram('answerCallbackQuery', array(
+        'callback_query_id' => $callback_query_id,
+        'text' => "✅ لغو شد و وجه بازگردانده شد.",
+        'show_alert' => false,
+    ));
+    Editmessagetext($from_id, $message_id, "✅ سفارش لغو و مبلغ {$rx_formattedRefund} تومان به کاربر <code>{$Payment_report['id_user']}</code> بازگردانده شد.\n👤 توسط ادمین: <code>$from_id</code>\n🛒 کد سفارش: {$order_id}", null);
 } elseif (preg_match('/reject_pay_(\w+)/', $datain, $datagetr) && ($adminrulecheck['rule'] == "administrator" || $adminrulecheck['rule'] == "Seller")) {
     $id_order = $datagetr[1];
     $Payment_report = select("Payment_report", "*", "id_order", $id_order, "select");
@@ -4801,6 +5019,21 @@ $caption";
     nm_adminInstantReply($from_id, $textbotlang['Admin']['Payment']['Reasonrejecting'], $backadmin, 'HTML');
     step('reject-dec', $from_id);
     Editmessagetext($from_id, $message_id, $text_inline, null);
+
+    // به بقیهٔ ادمین‌ها هم بلافاصله اطلاع بده که این رسید در حال رد شدنه، تا هرکسی
+    // که هنوز روی همون رسید نگاه می‌کنه بدونه دیگه لازم نیست چیزی بزنه.
+    $rx_rejectingText = "🟠 این پرداخت توسط ادمین دیگری رد شد.
+🛒 کد پیگیری پرداخت: {$Payment_report['id_order']}
+👤 ادمین رد کننده: <code>$from_id</code>";
+    $rx_adminMsgMap = json_decode($Payment_report['admin_msgs'] ?? '', true);
+    if (is_array($rx_adminMsgMap)) {
+        foreach ($rx_adminMsgMap as $rx_otherAdminId => $rx_otherMsgId) {
+            if ((string) $rx_otherAdminId === (string) $from_id) {
+                continue;
+            }
+            Editmessagetext($rx_otherAdminId, $rx_otherMsgId, $rx_rejectingText, null);
+        }
+    }
 } elseif ($user['step'] == "reject-dec") {
     $Payment_report = select("Payment_report", "*", "id_order", $user['Processing_value_one'], "select");
     update("Payment_report", "dec_not_confirmed", $text, "id_order", $user['Processing_value_one']);
@@ -4820,7 +5053,7 @@ $caption";
 💰 مبلغ پرداخت : {$Payment_report['price']}
 دلیل رد کردن : $text
 👤 ایدی عددی کاربر: {$Payment_report['id_user']}";
-    if (strlen($setting['Channel_Report']) > 0) {
+    if (reportChannelIsSet($setting)) {
         telegram('sendmessage', [
             'chat_id' => $setting['Channel_Report'],
             'message_thread_id' => $paymentreports,
@@ -5021,7 +5254,7 @@ $caption";
     );
     nm_adminInstantReply($from_id, "✅ درخواست با موفقیت رد شد.", $keyboardadmin, 'HTML');
     step('home', $from_id);
-    if (strlen($setting['Channel_Report']) > 0) {
+    if (reportChannelIsSet($setting)) {
         telegram('sendmessage', [
             'chat_id' => $setting['Channel_Report'],
             'message_thread_id' => $paymentreports,
@@ -5090,7 +5323,7 @@ $caption";
             . "⏰ " . date('Y/m/d H:i:s');
         @Editmessagetext($from_id, $message_id, $cmdOriginal . $cmdDoneNote, null);
     }
-    if (strlen($setting['Channel_Report'] ?? '') > 0 && (string) $setting['Channel_Report'] !== (string) $from_id) {
+    if (reportChannelIsSet($setting) && (string) $setting['Channel_Report'] !== (string) $from_id) {
         @telegram('sendmessage', [
             'chat_id' => $setting['Channel_Report'],
             'message_thread_id' => $paymentreports,
@@ -5488,7 +5721,7 @@ $caption";
     $textkam = "❌ کاربر عزیز مبلغ $balances1 تومان از  موجودی کیف پول تان کسر گردید.";
     sendmessage($user['Processing_value'], $textkam, null, 'HTML');
     step('home', $from_id);
-    if (strlen($setting['Channel_Report']) > 0) {
+    if (reportChannelIsSet($setting)) {
         $textaddbalance = "📌 یک ادمین موجودی کاربر را کم کرده است :
 
 🪪 اطلاعات ادمین کم کننده موجودی :
@@ -5951,23 +6184,23 @@ $text_expie_agent
     nm_adminInstantReply($from_id, $textbotlang['Admin']['SettingnowPayment']['Savaapi'], $keyboardzarinpal, 'HTML');
     update("PaySetting", "ValuePay", $text, "NamePay", "merchant_zarinpal");
     step('home', $from_id);
-} elseif ($text == "🗂 نام درگاه زرین پی") {
+} elseif ($text == "🗂 نام درگاه کیوب پی") {
     nm_adminInstantReply($from_id, " 📌 نام درگاه را ارسال نمايید", $backadmin, 'HTML');
     step("gettextzarinpey", $from_id);
 } elseif ($user['step'] == "gettextzarinpey") {
     nm_adminInstantReply($from_id, "✅  متن با موفقیت تنظیم گردید.", $keyboardzarinpey, 'HTML');
     update("textbot", "text", $text, "id_text", "zarinpey");
     step("home", $from_id);
-} elseif ($text == "🔑 توکن زرین پی" && $adminrulecheck['rule'] == "administrator") {
+} elseif ($text == "🔑 توکن کیوب پی" && $adminrulecheck['rule'] == "administrator") {
     $token = getPaySettingValue('token_zarinpey', '0');
-    $message = "🔑 توکن دسترسی زرین پی خود را ارسال کنید.\n\nتوکن فعلی شما: {$token}";
+    $message = "🔑 توکن دسترسی کیوب پی خود را ارسال کنید.\n\nتوکن فعلی شما: {$token}";
     nm_adminInstantReply($from_id, $message, $backadmin, 'HTML');
     step('token_zarinpey', $from_id);
 } elseif ($user['step'] == "token_zarinpey") {
     update("PaySetting", "ValuePay", $text, "NamePay", "token_zarinpey");
     nm_adminInstantReply($from_id, "✅ توکن با موفقیت ذخیره شد.", $keyboardzarinpey, 'HTML');
     step('home', $from_id);
-} elseif ($text == "💰 کش بک زرین پی") {
+} elseif ($text == "💰 کش بک کیوب پی") {
     nm_adminInstantReply($from_id, "📌 در این بخش می توانید تعیین کنید کاربر پس از پرداخت چه درصدی به عنوان هدیه به حسابش واریز شود. ( برای غیرفعال کردن این قابلیت عدد صفر ارسال کنید)", $backadmin, 'HTML');
     step("getcashzarinpey", $from_id);
 } elseif ($user['step'] == "getcashzarinpey") {
@@ -5978,23 +6211,45 @@ $text_expie_agent
     update("PaySetting", "ValuePay", $text, "NamePay", "chashbackzarinpey");
     nm_adminInstantReply($from_id, "✅ مبلغ با موفقیت ذخیره گردید.", $keyboardzarinpey, 'HTML');
     step('home', $from_id);
+} elseif ($text == "🧾 کارمزد ثابت (روشن/خاموش)") {
+    $currentFeeStatus = getPaySettingValue('zarinpeyfeestatus', 'offzarinpeyfee');
+    $newFeeStatus = ($currentFeeStatus === 'onzarinpeyfee') ? 'offzarinpeyfee' : 'onzarinpeyfee';
+    update("PaySetting", "ValuePay", $newFeeStatus, "NamePay", "zarinpeyfeestatus");
+    $feeAmountNow = number_format((int) getPaySettingValue('zarinpeyfeeamount', '0'));
+    if ($newFeeStatus === 'onzarinpeyfee') {
+        nm_adminInstantReply($from_id, "✅ کارمزد ثابت روشن شد.\n\n💵 مبلغ فعلی کارمزد: {$feeAmountNow} تومان\nاین مبلغ به فاکتور مشتری اضافه می‌شود ولی کیف پولش فقط به اندازه‌ی مبلغ درخواستی شارژ می‌شود.", $keyboardzarinpey, 'HTML');
+    } else {
+        nm_adminInstantReply($from_id, "❌ کارمزد ثابت خاموش شد.", $keyboardzarinpey, 'HTML');
+    }
+} elseif ($text == "💵 مبلغ کارمزد ثابت") {
+    $currentFeeAmount = getPaySettingValue('zarinpeyfeeamount', '0');
+    nm_adminInstantReply($from_id, "💵 مبلغ کارمزد ثابت (تومان) را ارسال کنید.\n\nمبلغ فعلی: {$currentFeeAmount} تومان\n\n(این مبلغ فقط وقتی «کارمزد ثابت» روشن باشد به فاکتور اضافه می‌شود.)", $backadmin, 'HTML');
+    step("getfeeamountzarinpey", $from_id);
+} elseif ($user['step'] == "getfeeamountzarinpey") {
+    if (!ctype_digit($text)) {
+        nm_adminInstantReply($from_id, $textbotlang['Admin']['agent']['invalidvlue'], $backadmin, 'HTML');
+        return;
+    }
+    update("PaySetting", "ValuePay", $text, "NamePay", "zarinpeyfeeamount");
+    nm_adminInstantReply($from_id, "✅ مبلغ کارمزد ثابت با موفقیت ذخیره گردید.", $keyboardzarinpey, 'HTML');
+    step('home', $from_id);
 } elseif ($text == "🧑🏼‍💻 اموزش اتصال") {
     $inlineKeyboard = json_encode([
         'inline_keyboard' => [
             [
                 [
-                    'text' => '📞 دریافت API  مشاوره',
-                    'url' => 'https://t.me/MiladRajabi2002',
+                    'text' => '🤖 مدیریت درگاه CubePay',
+                    'url' => 'https://t.me/cubepy_bot',
                 ],
             ],
         ],
     ], JSON_UNESCAPED_UNICODE);
 
-    $message = "🚀 درگاه کارت‌به‌کارت خودکار\n\nدرگاه هوشمند ZarinPay اکنون در فاکسیما بات نسخه پرو فعال است!\nتراکنش‌ها با خواندن پیامک بانکی به‌صورت خودکار و لحظه‌ای تأیید می‌شوند ⚡\nبدون نیاز به تأیید دستی، سریع، دقیق و ایمن 💳";
+    $message = "🚀 درگاه کارت‌به‌کارت خودکار\n\nدرگاه هوشمند CubePay اکنون در این ربات فعال است!\nتراکنش‌ها با خواندن پیامک بانکی به‌صورت خودکار و لحظه‌ای تأیید می‌شوند ⚡\nبدون نیاز به تأیید دستی، سریع، دقیق و ایمن 💳\n\nتوکن و آدرس‌های اتصال رو از ربات مدیریت CubePay (دکمه‌ی پایین) بگیرید.";
 
     nm_adminInstantReply($from_id, $message, $inlineKeyboard, 'HTML');
     step('home', $from_id);
-} elseif ($text == "⬇️ حداقل مبلغ زرین پی") {
+} elseif ($text == "⬇️ حداقل مبلغ کیوب پی") {
     nm_adminInstantReply($from_id, "📌 حداقل مبلغ واریزی را ارسال نمایید", $backadmin, 'HTML');
     step("getmainzarinpey", $from_id);
 } elseif ($user['step'] == "getmainzarinpey") {
@@ -6005,7 +6260,7 @@ $text_expie_agent
     update("PaySetting", "ValuePay", $text, "NamePay", "minbalancezarinpey");
     nm_adminInstantReply($from_id, "✅ حداقل مبلغ واریزی تنظیم گردید.", $keyboardzarinpey, 'HTML');
     step('home', $from_id);
-} elseif ($text == "⬆️ حداکثر مبلغ زرین پی") {
+} elseif ($text == "⬆️ حداکثر مبلغ کیوب پی") {
     nm_adminInstantReply($from_id, "📌 حداکثر مبلغ واریزی را ارسال نمایید", $backadmin, 'HTML');
     step("getmaaxzarinpey", $from_id);
 } elseif ($user['step'] == "getmaaxzarinpey") {
@@ -6016,7 +6271,7 @@ $text_expie_agent
     update("PaySetting", "ValuePay", $text, "NamePay", "maxbalancezarinpey");
     nm_adminInstantReply($from_id, "✅ حداکثر مبلغ واریزی تنظیم گردید.", $keyboardzarinpey, 'HTML');
     step('home', $from_id);
-} elseif ($text == "📚 تنظیم آموزش زرین پی" && $adminrulecheck['rule'] == "administrator") {
+} elseif ($text == "📚 تنظیم آموزش کیوب پی" && $adminrulecheck['rule'] == "administrator") {
     nm_adminInstantReply($from_id, "📌آموزش خود را ارسال نمایید .\n۱ - در صورتی که میخواید اموزشی نشان داده نشود عدد 2 را ارسال کنید\n۲ - شما می توانید آموزش بصورت فیلم ُ  متن ُ تصویر ارسال نمایید", $backadmin, 'HTML');
     step("helpzarinpey", $from_id);
 } elseif ($user['step'] == "helpzarinpey") {

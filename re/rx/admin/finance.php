@@ -1,5 +1,15 @@
 <?php
 
+// [FIX] nm_safe_direct_payment() (used by the manual "confirm payment & build service" admin action
+// below) lives in lib/SafeDirectPayment.php. It's already required by the payment gateway callback
+// files, but this admin-bot context never loaded it on its own.
+if (!function_exists('nm_safe_direct_payment')) {
+    $__nmSafeDirectPaymentLib = (defined('REFACTORED_LEGACY_ROOT') ? REFACTORED_LEGACY_ROOT : dirname(__DIR__, 3)) . '/lib/SafeDirectPayment.php';
+    if (is_file($__nmSafeDirectPaymentLib)) {
+        require_once $__nmSafeDirectPaymentLib;
+    }
+}
+
 if (function_exists('nmResolvePanelNameForUser')) {
     // Some legacy handlers in this file (panel-name edit, URL edit, etc.)
     // expect $user['Processing_value'] to be a SCALAR panel name. This shim
@@ -1116,7 +1126,7 @@ if (false) {
     step('home', $from_id);
     $Balance_user_after = number_format(select("user", "*", "id", $user['Processing_value'], "select")['Balance']);
     $pricadd = number_format($text);
-    if (strlen($setting['Channel_Report']) > 0) {
+    if (reportChannelIsSet($setting)) {
         $textaddbalance = "📌 یک ادمین موجودی کاربر را افزایش داده است :
 
 🪪 اطلاعات ادمین افزایش دهنده موجودی :
@@ -1173,7 +1183,7 @@ if (false) {
     sendmessage($user['Processing_value'], $textkam, null, 'HTML');
     step('home', $from_id);
     $Balance_user_afters = number_format(select("user", "*", "id", $user['Processing_value'], "select")['Balance']);
-    if (strlen($setting['Channel_Report']) > 0) {
+    if (reportChannelIsSet($setting)) {
         $textaddbalance = "📌 یک ادمین موجودی کاربر را کم کرده است :
 
 🪪 اطلاعات ادمین کم کننده موجودی :
@@ -1227,7 +1237,7 @@ $iduser  در ربات مسدود گردید
             ],
         ]
     ]);
-    if (strlen($setting['Channel_Report']) > 0) {
+    if (reportChannelIsSet($setting)) {
         telegram('sendmessage', [
             'chat_id' => $setting['Channel_Report'],
             'message_thread_id' => $otherservice,
@@ -1264,7 +1274,7 @@ $iduser  در ربات  رفع مسدود گردید
             ],
         ]
     ]);
-    if (strlen($setting['Channel_Report']) > 0) {
+    if (reportChannelIsSet($setting)) {
         telegram('sendmessage', [
             'chat_id' => $setting['Channel_Report'],
             'message_thread_id' => $otherservice,
@@ -1297,9 +1307,38 @@ $iduser  در ربات  رفع مسدود گردید
 ⚜️ وضعیت پرداخت : {$paymentUser['payment_Status']}
 ⭕️ روش پرداخت : {$paymentUser['Payment_Method']}
 📆 تاریخ خرید :  {$paymentUser['time']}";
-        nm_adminInstantReply($from_id, $text_order, null, 'HTML');
+        // [FIX] این لیست قبلاً فقط نمایشی بود — برای تراکنش‌های Unpaid/در انتظار هیچ
+        // دکمه‌ای برای اقدام نبود، و تنها راه تغییر وضعیتشون ویرایش دستی دیتابیس بود.
+        // این‌جا از همون فلوی تایید کارت‌به‌کارت (Confirm_pay_) که قبلاً وجود داره و
+        // تست‌شده استفاده می‌کنیم (تایید = فعال‌سازی سرویس + اطلاع به مشتری)، و یک
+        // دکمه حذف هم برای فاکتورهای ناقص/بی‌مصرف اضافه می‌کنیم.
+        $rxPendingStatuses = ['Unpaid', 'unpaid', 'waiting', 'reject_pending'];
+        $rxActionRow = [];
+        if (in_array((string)($paymentUser['payment_Status'] ?? ''), $rxPendingStatuses, true)) {
+            $rxActionRow[] = ['text' => '✅ تایید و فعال‌سازی', 'callback_data' => 'Confirm_pay_' . $paymentUser['id_order']];
+            $rxActionRow[] = ['text' => '🗑 حذف این تراکنش', 'callback_data' => 'admindelpending_' . $paymentUser['id_order']];
+        }
+        $rxOrderKb = !empty($rxActionRow) ? json_encode(['inline_keyboard' => [$rxActionRow]]) : null;
+        nm_adminInstantReply($from_id, $text_order, $rxOrderKb, 'HTML');
     }
     nm_adminInstantReply($from_id, $textbotlang['Admin']['ManageUser']['sendpayemntlist'], $keyboardadmin, 'HTML');
+} elseif (preg_match('/admindelpending_(.*)/', $datain, $dataget) && ($adminrulecheck['rule'] == "administrator" || $adminrulecheck['rule'] == "Seller")) {
+    // [NEW] Manual cleanup for a stuck/incomplete Payment_report row (e.g. the user
+    // never sent a receipt at the right step, or hit "back" mid-flow). Refuses to
+    // touch anything already marked paid, so this can never undo a real payment.
+    $rxOrderId = $dataget[1];
+    $rxDelStmt = $pdo->prepare("DELETE FROM Payment_report WHERE id_order = :id AND payment_Status <> 'paid'");
+    $rxDelStmt->bindValue(':id', $rxOrderId, PDO::PARAM_STR);
+    $rxDelStmt->execute();
+    if ($rxDelStmt->rowCount() >= 1) {
+        Editmessagetext($from_id, $message_id, "🗑 این تراکنش ناقص/در انتظار حذف شد.", json_encode(['inline_keyboard' => []]));
+    } else {
+        telegram('answerCallbackQuery', [
+            'callback_query_id' => $callback_query_id,
+            'text' => 'این تراکنش قبلاً پرداخت‌شده ثبت شده یا یافت نشد — برای احتیاط حذف نشد.',
+            'show_alert' => true,
+        ]);
+    }
 } elseif (preg_match('/affiliates-(\w+)/', $datain, $dataget)) {
     $iduser = $dataget[1];
     $affiliatesUsers = select("user", "*", "affiliates", $iduser, "count");
@@ -1341,7 +1380,15 @@ $iduser  در ربات  رفع مسدود گردید
     $ManagePanel->RemoveUser($info_product['Service_location'], $info_product['username']);
     update('invoice', 'status', 'removebyadmin', 'id_invoice', $username);
     nm_adminInstantReply($from_id, $textbotlang['Admin']['ManageUser']['RemovedService'], $keyboardadmin, 'HTML');
-    Editmessagetext($from_id, $message_id, $text_inline, json_encode(['inline_keyboard' => []]));
+    // [FIX] offer a way straight back to this user's order list instead of a dead-end
+    // empty keyboard — see the matching note on confirmremovefulls- above.
+    $__backToListKb = ['inline_keyboard' => []];
+    if (!empty($info_product['id_user'])) {
+        $__backToListKb['inline_keyboard'][] = [
+            ['text' => '🔙 بازگشت به لیست سفارشات این کاربر', 'callback_data' => 'vieworderuser_' . $info_product['id_user']],
+        ];
+    }
+    Editmessagetext($from_id, $message_id, $text_inline, json_encode($__backToListKb));
     step('home', $from_id);
 } elseif (preg_match('/removeserviceandback-(\w+)/', $datain, $dataget)) {
     $username = $dataget[1];
@@ -1366,7 +1413,14 @@ $iduser  در ربات  رفع مسدود گردید
     $textadd = "💎 کاربر عزیز مبلغ {$info_product['price_product']} تومان به موجودی کیف پول تان اضافه گردید.";
     sendmessage($info_product['id_user'], $textadd, null, 'HTML');
     nm_adminInstantReply($from_id, $textbotlang['Admin']['ManageUser']['RemovedService'], $keyboardadmin, 'HTML');
-    Editmessagetext($from_id, $message_id, $text_inline, json_encode(['inline_keyboard' => []]));
+    // [FIX] same as above — keep a path back to the order list instead of an empty keyboard.
+    $__backToListKb = ['inline_keyboard' => []];
+    if (!empty($info_product['id_user'])) {
+        $__backToListKb['inline_keyboard'][] = [
+            ['text' => '🔙 بازگشت به لیست سفارشات این کاربر', 'callback_data' => 'vieworderuser_' . $info_product['id_user']],
+        ];
+    }
+    Editmessagetext($from_id, $message_id, $text_inline, json_encode($__backToListKb));
     step('home', $from_id);
 } elseif ($text == "🎁 ساخت کد تخفیف" && $adminrulecheck['rule'] == "administrator") {
     nm_adminInstantReply($from_id, "🌐 ساخت و مدیریت کد تخفیف و کد هدیه از طریق ربات غیرفعال شده است.\n\nلطفاً برای ساخت یا مدیریت کدهای تخفیف و هدیه به پنل تحت وب مراجعه کنید.", $shopkeyboard, 'HTML');
@@ -1623,7 +1677,7 @@ $iduser  در ربات  رفع مسدود گردید
 نام کاربری کاربر : {$Balance_user['username']}
 مبلغ تراکنش در فاکتور :  {$Payment_report['price']}
 مبلغ تراکنش واریزی توسط ادمین : $text";
-    if (strlen($setting['Channel_Report']) > 0) {
+    if (reportChannelIsSet($setting)) {
         telegram('sendmessage', [
             'chat_id' => $setting['Channel_Report'],
             'message_thread_id' => $paymentreports,
@@ -1906,6 +1960,27 @@ n2", $backadmin, 'HTML');
     $keyboardlists['inline_keyboard'][] = [
         ['text' => "🗑 حذف کامل سرویس", 'callback_data' => "removefull-" . $OrderUser['id_invoice']],
     ];
+    // [FIX] Previously an "unpaid" order only ever offered delete buttons here — no way to mark it
+    // paid/delivered, and admins couldn't tell it apart from a normal active order except by reading
+    // the raw Status text. Rows in the `invoice` table are always new-purchase attempts (renewals
+    // never insert a new invoice row — they update an existing active one and log to service_other),
+    // so an unpaid row here specifically means: the customer started a purchase but the service was
+    // never created on the panel (payment never completed, or it completed but delivery failed
+    // silently — see nm_safe_direct_payment). Give the admin a real way to resolve it instead of
+    // forcing a delete.
+    $__isUnpaidOrder = (strtolower((string)($OrderUser['Status'] ?? '')) === 'unpaid');
+    if ($__isUnpaidOrder) {
+        array_unshift($keyboardlists['inline_keyboard'], [
+            ['text' => "✅ تایید پرداخت و ساخت سرویس", 'callback_data' => "confirmpaidorder-" . $OrderUser['id_invoice']],
+        ]);
+    }
+    // [FIX] let the admin jump back to this user's order list from here directly,
+    // without needing to delete/act on the order first.
+    if (!empty($OrderUser['id_user'])) {
+        $keyboardlists['inline_keyboard'][] = [
+            ['text' => "🔙 بازگشت به لیست سفارشات این کاربر", 'callback_data' => "vieworderuser_" . $OrderUser['id_user']],
+        ];
+    }
     if (isset($OrderUser['time_sell'])) {
         $datatime = jdate('Y/m/d H:i:s', $OrderUser['time_sell']);
     } else {
@@ -1934,9 +2009,14 @@ n2", $backadmin, 'HTML');
             }
         }
     }
+    // [FIX] این جدول فقط شامل خریدهای جدید است؛ تمدیدها هرگز ردیف جدید در invoice نمی‌سازند (فقط
+    // وضعیت سرویس فعال موجود را آپدیت می‌کنند)، پس این خط به ادمین صریحاً می‌گوید با چه سفارشی طرف است.
+    $__orderTypeLine = "🆕 نوع سفارش : خرید جدید (تمدیدها اینجا سفارش تازه ثبت نمی‌کنند)";
+
     $text_order = "
 🛒 شماره سفارش  :  <code>{$OrderUser['id_invoice']}</code>
 🛒  وضعیت سفارش در ربات : <code>{$OrderUser['Status']}</code>
+{$__orderTypeLine}
 🙍‍♂️ شناسه کاربر : <code>{$OrderUser['id_user']}</code>
 👤 نام کاربری اشتراک :  <code>{$OrderUser['username']}</code>
 📍 موقعیت سرویس :  {$OrderUser['Service_location']}
@@ -1946,6 +2026,17 @@ n2", $backadmin, 'HTML');
 ⏳ زمان سرویس خریداری شده : {$OrderUser['Service_time']}
 📆 تاریخ خرید : $datatime
 ";
+
+    // [FIX] برای سفارش unpaid سرویس اصلاً روی پنل ساخته نشده، پس چک‌کردن وضعیت روی پنل فقط باعث
+    // یک پیام گمراه‌کننده‌ی "کاربر در پنل وجود ندارد" و یک کال اضافه به پنل می‌شد. مستقیم کیبورد بالا
+    // (که حالا شامل دکمه‌ی تایید پرداخت است) را نشان می‌دهیم.
+    if ($__isUnpaidOrder) {
+        $keyboard_json = json_encode($keyboardlists);
+        nm_adminInstantReply($from_id, $text_order, $keyboard_json, 'HTML');
+        step('home', $from_id);
+        return;
+    }
+
     if (function_exists('nmStopIfServicePanelBlocked') && nmStopIfServicePanelBlocked($OrderUser, $from_id, $keyboardadmin)) {
         $keyboard_json = json_encode($keyboardlists);
         nm_adminInstantReply($from_id, $text_order, $keyboard_json, 'HTML');
@@ -2056,6 +2147,98 @@ n2", $backadmin, 'HTML');
 👤 نام کاربری کانفیگ: {$extend['username']}";
             nm_adminInstantReply($from_id, $extendtext, null, 'HTML');
         }
+    }
+    step('home', $from_id);
+} elseif (preg_match('/confirmpaidorder-(.*)/', $datain, $dataget)) {
+    // [FIX] Step 1 of manually resolving a stuck "unpaid" order: ask for a real confirmation before
+    // doing anything, since this actually creates/charges a service — same caution as removefull-.
+    $id_invoice = $dataget[1];
+    $__inv = select("invoice", "*", "id_invoice", $id_invoice, "select");
+    if (!$__inv || strtolower((string)($__inv['Status'] ?? '')) !== 'unpaid') {
+        telegram('answerCallbackQuery', [
+            'callback_query_id' => $callback_query_id,
+            'text' => "این سفارش دیگر در وضعیت unpaid نیست (شاید همین الان توسط ادمین دیگری یا به‌صورت خودکار پردازش شده).",
+            'show_alert' => true,
+            'cache_time' => 5,
+        ]);
+        return;
+    }
+    $__confirmKb = json_encode([
+        'inline_keyboard' => [
+            [['text' => "✅ بله، پرداخت تایید است، سرویس ساخته شود", 'callback_data' => "dopaidorderconfirm-" . $id_invoice]],
+            [['text' => "🔙 انصراف و بازگشت", 'callback_data' => "manageinvoice_" . $id_invoice]],
+        ],
+    ]);
+    Editmessagetext($from_id, $message_id, "❓ آیا مطمئن هستید وجه این سفارش را دریافت کرده‌اید؟\n\n"
+        . "با تایید، تلاش می‌شود سرویس روی پنل ساخته و اطلاعات اتصال برای مشتری ارسال شود.\n\n"
+        . "🛒 کد سفارش: <code>{$id_invoice}</code>\n"
+        . "👤 نام کاربری اشتراک: <code>{$__inv['username']}</code>\n"
+        . "💰 مبلغ: " . number_format((float)$__inv['price_product']) . " تومان", $__confirmKb);
+} elseif (preg_match('/dopaidorderconfirm-(.*)/', $datain, $dataget)) {
+    // [FIX] Step 2: actually resolve it. Rather than re-implementing panel account creation (custom
+    // volume handling, sequential usernames, national/emergency-panel fallback, zombie-rescue, ...)
+    // this reuses the exact same, already-hardened DirectPayment() pipeline every other payment
+    // method goes through — it just makes sure a Payment_report row exists for it to key off of
+    // (an admin manually confirming a bank transfer never went through a gateway, so there may be
+    // no Payment_report at all yet), then calls the safe wrapper so failures are still reported here.
+    $id_invoice = $dataget[1];
+    $__inv = select("invoice", "*", "id_invoice", $id_invoice, "select");
+    if (!$__inv || strtolower((string)($__inv['Status'] ?? '')) !== 'unpaid') {
+        telegram('answerCallbackQuery', [
+            'callback_query_id' => $callback_query_id,
+            'text' => "این سفارش دیگر در وضعیت unpaid نیست.",
+            'show_alert' => true,
+            'cache_time' => 5,
+        ]);
+        return;
+    }
+    telegram('answerCallbackQuery', [
+        'callback_query_id' => $callback_query_id,
+        'text' => "⏳ در حال ساخت سرویس...",
+        'show_alert' => false,
+    ]);
+    Editmessagetext($from_id, $message_id, "⏳ در حال تایید پرداخت و ساخت سرویس توسط ادمین <code>{$from_id}</code> ...\n\n🛒 کد سفارش: <code>{$id_invoice}</code>", null);
+
+    $__existingPr = select("Payment_report", "*", "id_invoice", "getconfigafterpay|" . $__inv['username'], "select");
+    if (is_array($__existingPr) && !empty($__existingPr['id_order'])) {
+        $__orderIdForDirect = $__existingPr['id_order'];
+        if (strtolower((string)($__existingPr['payment_Status'] ?? '')) !== 'paid') {
+            try { update("Payment_report", "payment_Status", "paid", "id_order", $__orderIdForDirect); } catch (Throwable $e) {  }
+        }
+    } else {
+        $__orderIdForDirect = "adminconfirm_" . bin2hex(random_bytes(4));
+        try {
+            $__stmt = $pdo->prepare("INSERT INTO Payment_report (id_user,id_order,time,price,payment_Status,Payment_Method,id_invoice) VALUES (?,?,?,?,?,?,?)");
+            $__stmt->execute([
+                (string)$__inv['id_user'],
+                $__orderIdForDirect,
+                date('Y/m/d H:i:s'),
+                (string)$__inv['price_product'],
+                'paid',
+                'تایید پرداخت توسط ادمین (دستی)',
+                'getconfigafterpay|' . $__inv['username'],
+            ]);
+        } catch (Throwable $e) {
+            nm_adminInstantReply($from_id, "❌ خطا در ثبت رسید پرداخت دستی: " . htmlspecialchars($e->getMessage(), ENT_QUOTES, 'UTF-8'), $keyboardadmin, 'HTML');
+            step('home', $from_id);
+            return;
+        }
+    }
+
+    $__ok = function_exists('nm_safe_direct_payment')
+        ? nm_safe_direct_payment($__orderIdForDirect)
+        : (function_exists('DirectPayment') ? (DirectPayment($__orderIdForDirect) !== false) : false);
+
+    $__afterInv = select("invoice", "*", "id_invoice", $id_invoice, "select");
+    $__backKb = json_encode([
+        'inline_keyboard' => [
+            [['text' => "مشاهده اطلاعات سفارش", 'callback_data' => "manageinvoice_" . $id_invoice]],
+        ],
+    ]);
+    if ($__afterInv && strtolower((string)($__afterInv['Status'] ?? '')) !== 'unpaid') {
+        nm_adminInstantReply($from_id, "✅ سرویس با موفقیت ساخته شد و برای مشتری ارسال گردید.\n\n🛒 کد سفارش: <code>{$id_invoice}</code>", $__backKb, 'HTML');
+    } else {
+        nm_adminInstantReply($from_id, "⚠️ ساخت سرویس هنوز کامل نشده — گزارش خطای دقیق در کانال ادمین (بخش گزارش خطا) ارسال شد. سفارش هنوز unpaid است، دوباره تلاش کنید یا بررسی دستی کنید.", $__backKb, 'HTML');
     }
     step('home', $from_id);
 } elseif ($text == "🛒 وضعیت قابلیت های فروشگاه" && $adminrulecheck['rule'] == "administrator") {
@@ -2706,7 +2889,7 @@ n2", $backadmin, 'HTML');
 💰 مبلغ بازگشتی : $pricelast تومان
 👤 نام کاربری : {$requestcheck['username']}
         آیدی عددی درخواست کننده کنسل کردن : {$nameloc['id_user']}";
-    if (strlen($setting['Channel_Report']) > 0) {
+    if (reportChannelIsSet($setting)) {
         telegram('sendmessage', [
             'chat_id' => $setting['Channel_Report'],
             'message_thread_id' => $otherreport,
@@ -2756,7 +2939,7 @@ n2", $backadmin, 'HTML');
 💰 مبلغ بازگشتی : $text تومان
 👤 نام کاربری : {$invoice['username']}
 آیدی عددی درخواست کننده کنسل کردن : {$invoice['id_user']}";
-    if (strlen($setting['Channel_Report']) > 0) {
+    if (reportChannelIsSet($setting)) {
         telegram('sendmessage', [
             'chat_id' => $setting['Channel_Report'],
             'message_thread_id' => $otherreport,
@@ -3158,6 +3341,32 @@ n2", $backadmin, 'HTML');
         ? "✅ سفارش‌های حذف‌شده پس از {$text} روز به‌صورت خودکار از دیتابیس پاک می‌شوند."
         : "✅ پاکسازی خودکار غیرفعال شد؛ سفارش‌های حذف‌شده در دیتابیس باقی می‌مانند.";
     nm_adminInstantReply($from_id, $purgemsg, $setting_panel, 'HTML');
+} elseif ($datain == "setpurgepaymentdays" && $adminrulecheck['rule'] == "administrator") {
+    // [FEATURE] پاکسازی خودکار فاکتورهای منقضی/ردشده از جدول Payment_report.
+    $paycurrent = intval($setting['purgepaymentdays'] ?? 0);
+    $paystatus = $paycurrent > 0 ? "{$paycurrent} روز" : "غیرفعال";
+    nm_adminInstantReply($from_id, "🧾 پاکسازی خودکار فاکتورهای منقضی
+
+فاکتورهایی که پرداخت نشده و منقضی شده‌اند یا توسط ادمین رد شده‌اند (وضعیت expire و reject)، در دیتابیس باقی می‌مانند تا اگر مشتری با رسید دیرهنگام برگشت، فاکتورش موجود باشد.
+
+📌 تعداد روزی که می‌خواهید این فاکتورها نگه داشته شوند را ارسال کنید. بعد از این مدت، خودکار حذف می‌شوند.
+
+⚠️ عدد 0 یعنی غیرفعال.
+✅ فاکتورهای پرداخت‌شده و رسیدهای در انتظار بررسی هرگز حذف نمی‌شوند.
+
+وضعیت فعلی : {$paystatus}", $backadmin, 'HTML');
+    step("getpurgepaymentdays", $from_id);
+} elseif ($user['step'] == "getpurgepaymentdays") {
+    if (!ctype_digit($text)) {
+        nm_adminInstantReply($from_id, $textbotlang['Admin']['agent']['invalidvlue'], $backadmin, 'HTML');
+        return;
+    }
+    update("setting", "purgepaymentdays", $text);
+    step("home", $from_id);
+    $paymsg = intval($text) > 0
+        ? "✅ فاکتورهای منقضی/ردشده پس از {$text} روز به‌صورت خودکار حذف می‌شوند."
+        : "✅ پاکسازی خودکار فاکتورها غیرفعال شد.";
+    nm_adminInstantReply($from_id, $paymsg, $setting_panel, 'HTML');
 } elseif ($datain == "setting_on_holdcron" && $adminrulecheck['rule'] == "administrator") {
     nm_adminInstantReply($from_id, "در این بخش باید تغیین کنید که اگر کاربر بعد از چند روز به کانفیگ خود وصل نشد و در وضعیت on_hold بود به کاربر پیام دهد" . $setting['on_hold_day'] . "روز", $backadmin, 'HTML');
     step("on_hold_day", $from_id);
