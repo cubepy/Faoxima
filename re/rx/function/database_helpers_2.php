@@ -1098,9 +1098,53 @@ function DirectPayment($order_id, $image = 'images.jpg')
             }
         }
         $output_config_link = $marzban_list_get['sublink'] == "onsublink" ? $dataoutput['subscription_url'] : "";
-        $datatextbot['textafterpay'] = $marzban_list_get['type'] == "Manualsale" ? $datatextbot['textmanual'] : $datatextbot['textafterpay'];
-        $datatextbot['textafterpay'] = $marzban_list_get['type'] == "WGDashboard" ? $datatextbot['text_wgdashboard'] : $datatextbot['textafterpay'];
-        $datatextbot['textafterpay'] = $marzban_list_get['type'] == "ibsng" || $marzban_list_get['type'] == "mikrotik" ? $datatextbot['textafterpayibsng'] : $datatextbot['textafterpay'];
+        // [FIX] «فقط QR تحویل داده می‌شود، بدون متن و بدون لینک ساب».
+        //
+        // قالبِ پیامِ تحویل از جدول textbot می‌آید. وقتی DirectPayment از کال‌بکِ
+        // درگاه (نه از وبهوکِ ربات) صدا زده می‌شود، این قالب همان لحظه از دیتابیس
+        // خوانده می‌شود؛ و اگر درست در همان لحظه اتصال در دسترس نباشد — که با
+        // خطای 1040 روی هاست اشتراکی پیش می‌آید — select() به‌جای خطا آرایه‌ی
+        // خالی برمی‌گرداند. نتیجه: کپشن خالی و QR بدون لینک اشتراک. کارت‌به‌کارت
+        // و کیف پول سالم‌اند چون داخل وبهوک اجرا می‌شوند و قالب از قبل لود شده.
+        //
+        // پول گرفته شده و سرویس ساخته شده، پس تحویلِ لینک نباید به در دسترس بودنِ
+        // قالب گره بخورد: یک بار دیگر تلاش می‌کنیم و در نهایت از قالبِ پیش‌فرضِ
+        // داخلی استفاده می‌کنیم تا لینک اشتراک همیشه به مشتری برسد.
+        $rxDeliveryTemplate = (string) ($datatextbot['textafterpay'] ?? '');
+        if (trim($rxDeliveryTemplate) === '') {
+            $rxRetryRows = select('textbot', '*', null, null, 'fetchAll');
+            if (is_array($rxRetryRows)) {
+                foreach ($rxRetryRows as $rxRow) {
+                    if (($rxRow['id_text'] ?? '') === 'textafterpay') {
+                        $rxDeliveryTemplate = (string) ($rxRow['text'] ?? '');
+                        break;
+                    }
+                }
+            }
+        }
+        if (trim($rxDeliveryTemplate) === '') {
+            error_log('DirectPayment: textafterpay template unavailable, using built-in fallback (order=' . $order_id . ')');
+            $rxDeliveryTemplate = "\xE2\x9C\x85 سرویس با موفقیت ایجاد شد\n\n"
+                . "\xF0\x9F\x91\xA4 نام کاربری سرویس : {username}\n"
+                . "\xF0\x9F\x8C\xBF نام سرویس : {name_service}\n"
+                . "\xF0\x9F\x87\xBA\xF0\x9F\x87\xB3 لوکیشن : {location}\n"
+                . "\xE2\x8F\xB3 مدت زمان : {day} روز\n"
+                . "\xF0\x9F\x97\x9C حجم سرویس : {volume} گیگابایت\n\n"
+                . "{connection_links}";
+        }
+        $datatextbot['textafterpay'] = $rxDeliveryTemplate;
+        $datatextbot['textmanual'] = (string) ($datatextbot['textmanual'] ?? '');
+        $datatextbot['text_wgdashboard'] = (string) ($datatextbot['text_wgdashboard'] ?? '');
+        $datatextbot['textafterpayibsng'] = (string) ($datatextbot['textafterpayibsng'] ?? '');
+        if ($marzban_list_get['type'] == "Manualsale" && trim($datatextbot['textmanual']) !== '') {
+            $datatextbot['textafterpay'] = $datatextbot['textmanual'];
+        }
+        if ($marzban_list_get['type'] == "WGDashboard" && trim($datatextbot['text_wgdashboard']) !== '') {
+            $datatextbot['textafterpay'] = $datatextbot['text_wgdashboard'];
+        }
+        if (($marzban_list_get['type'] == "ibsng" || $marzban_list_get['type'] == "mikrotik") && trim($datatextbot['textafterpayibsng']) !== '') {
+            $datatextbot['textafterpay'] = $datatextbot['textafterpayibsng'];
+        }
         if (intval($get_invoice['Service_time']) == 0)
             $get_invoice['Service_time'] = $textbotlang['users']['stateus']['Unlimited'];
         $textcreatuser = str_replace('{username}', $dataoutput['username'], $datatextbot['textafterpay']);

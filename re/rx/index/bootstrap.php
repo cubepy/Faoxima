@@ -388,6 +388,14 @@ if (function_exists('rx_resolveInlineButtonText') && isset($datain) && is_string
     if ($rxResolvedInlineText !== null && $rxResolvedInlineText !== '') {
         $datain = $rxResolvedInlineText;
         $text = $rxResolvedInlineText;
+        // همان دلیلِ بلوکِ apn: پایین — برچسبِ ذخیره‌شده تزئین‌شده است و باید قبل
+        // از رسیدن به هندلرها به شکل خام برگردد.
+        if (function_exists('rx_restorePremiumReplyText')) {
+            $text = rx_restorePremiumReplyText($text);
+        }
+        if (function_exists('stripReplyStyleEmoji')) {
+            $text = stripReplyStyleEmoji($text);
+        }
     }
 }
 
@@ -421,6 +429,25 @@ if (
         }
         $text  = $rxResolvedText;
         $datain = '';
+
+        // [FIX] «با روشن کردن دکمه شیشه‌ای، بعضی دکمه‌ها کار نمی‌کنند».
+        //
+        // برچسبِ دکمه‌ها قبل از نمایش تزئین می‌شود: یک نقطه‌ی رنگی (🔵/🟢/🔴) بر
+        // اساس style، و در حالت پریمیوم جایگزینی ایموجی. هندلرها اما با متنِ خامِ
+        // دکمه مقایسه می‌کنند، برای همین دو نرمال‌سازیِ بالا وجود دارد — ولی هر دو
+        // شرطِ empty($datain) دارند و در حالت شیشه‌ای اجرا نمی‌شوند، چون آنجا
+        // $datain همین کال‌بکِ apn: است و تازه همین‌جا خالی می‌شود.
+        //
+        // نتیجه: در حالت شیشه‌ای، $text با نقطه‌ی رنگی/ایموجیِ عوض‌شده به هندلر
+        // می‌رسد، هیچ شرطی مطابقت نمی‌کند و دکمه بی‌صدا هیچ کاری نمی‌کند. فقط
+        // دکمه‌هایی که style ندارند سالم می‌مانند — همان «یک سری دکمه‌ها».
+        // هر دو تابع اگر چیزی برای تغییر نبینند متن را دست‌نخورده برمی‌گردانند.
+        if (function_exists('rx_restorePremiumReplyText')) {
+            $text = rx_restorePremiumReplyText($text);
+        }
+        if (function_exists('stripReplyStyleEmoji')) {
+            $text = stripReplyStyleEmoji($text);
+        }
     }
 }
 
