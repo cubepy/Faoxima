@@ -32,14 +32,19 @@ final class PaymentReceiptHandler extends BaseHandler
         }
 
 
+        // [FIX] قید source = 'miniapp' برداشته شد. صاحبِ فاکتور همچنان با id_user
+        // بررسی می‌شود، پس محدودیتی از دست نمی‌رود؛ ولی این قید باعث می‌شد رسیدِ
+        // فاکتورهایی که از خودِ ربات ساخته شده‌اند از داخل مینی‌اپ قابل ارسال نباشد.
         $payment = FaoximaDb::fetchOne(
             'SELECT * FROM Payment_report
-              WHERE id_order = :o AND id_user = :u AND source = \'miniapp\'
+              WHERE id_order = :o AND id_user = :u
               LIMIT 1',
             [':o' => $orderId, ':u' => $this->user['id']]
         );
         if ($payment === null) {
-            FaoximaResponse::notFound('Payment record not found');
+            // پیام فارسیِ روشن به‌جای متن فنی: مینی‌اپ همین متن را به کاربر نشان
+            // می‌دهد، و «Payment record not found» برای مشتری هیچ معنایی ندارد.
+            FaoximaResponse::fail(404, '❌ این فاکتور دیگر در سیستم موجود نیست (احتمالاً منقضی شده). لطفاً یک فاکتور جدید بسازید و رسید را روی آن ارسال کنید. اگر مبلغ را واریز کرده‌اید، رسید را برای پشتیبانی بفرستید.');
         }
         $currentStatus = strtolower((string)($payment['payment_Status'] ?? ''));
         if ($currentStatus === 'paid') {
@@ -116,10 +121,19 @@ final class PaymentReceiptHandler extends BaseHandler
         ], JSON_UNESCAPED_UNICODE);
 
 
+        // [FIX] این حلقه قبلاً هیچ سقف زمانی کلی نداشت: برای هر ادمین تا 30 ثانیه (sendPhoto)
+        // یا 15 ثانیه (متن/فوروارد) صبر می‌کرد، به‌صورت پشت‌سرهم. اگه اتصال سرور به
+        // api.telegram.org کند/ناپایدار بود (رایج روی هاست‌های ایرانی) یا چند ادمین تنظیم شده
+        // بود، مجموع این تاخیرها می‌تونست از max_execution_time پی‌اچ‌پی هاست رد بشه — یعنی
+        // اسکریپت وسط کار متوقف می‌شد بدون اینکه هیچ پاسخی به مینی‌اپ برگرده، و کاربر همون
+        // «در حال ارسال...» رو تا ابد می‌دید. الان یه سقف زمانی کلی (۲۰ ثانیه) روی کل تلاش
+        // برای اطلاع‌رسانی به ادمین‌ها گذاشته شده تا این متد در هر حالتی به‌سرعت جواب بده.
+        $notifyDeadline = microtime(true) + 20.0;
+
         $fileId = null;
         $failedAdmins = [];
         $remainingAdmins = $adminIds;
-        while (!empty($remainingAdmins)) {
+        while (!empty($remainingAdmins) && microtime(true) < $notifyDeadline) {
             $candidate = array_shift($remainingAdmins);
             $maybeFileId = $this->sendReceiptPhoto($apiKey, $candidate, $tmp, (string)($f['type'] ?? 'image/jpeg'), $caption, $keyboard);
             if (is_string($maybeFileId) && $maybeFileId !== '') {
@@ -132,6 +146,7 @@ final class PaymentReceiptHandler extends BaseHandler
         if ($fileId === null) {
             $textOk = false;
             foreach ($failedAdmins as $adminId) {
+                if (microtime(true) >= $notifyDeadline) break;
                 if ($this->sendReceiptText($apiKey, $adminId, $caption, $keyboard)) {
                     $textOk = true;
                 }
@@ -142,11 +157,13 @@ final class PaymentReceiptHandler extends BaseHandler
             }
         } else {
             foreach ($failedAdmins as $adminId) {
+                if (microtime(true) >= $notifyDeadline) break;
                 if (!$this->forwardReceiptByFileId($apiKey, $adminId, $fileId, $caption, $keyboard)) {
                     $this->sendReceiptText($apiKey, $adminId, $caption, $keyboard);
                 }
             }
             foreach ($remainingAdmins as $adminId) {
+                if (microtime(true) >= $notifyDeadline) break;
                 if (!$this->forwardReceiptByFileId($apiKey, $adminId, $fileId, $caption, $keyboard)) {
                     $this->sendReceiptText($apiKey, $adminId, $caption, $keyboard);
                 }
@@ -159,7 +176,7 @@ final class PaymentReceiptHandler extends BaseHandler
             $stmt = $pdo->prepare(
                 'UPDATE Payment_report
                     SET payment_Status = :s
-                  WHERE id_order = :o AND id_user = :u AND source = \'miniapp\''
+                  WHERE id_order = :o AND id_user = :u'
             );
             $stmt->execute([
                 ':s' => 'waiting',
@@ -170,7 +187,12 @@ final class PaymentReceiptHandler extends BaseHandler
             FaoximaLogger::warn('Payment_report status update failed', ['err' => $e->getMessage()]);
         }
 
-        FaoximaLogger::debug('Receipt uploaded', [
+        // [FIX] این لاگ قبلاً با سطح debug ثبت می‌شد که به‌طور پیش‌فرض فیلتر می‌شه و اصلاً
+        // نوشته نمی‌شه (چون حداقل سطح لاگ روی 'info' تنظیمه). یعنی حتی وقتی همه‌چیز درست کار
+        // می‌کرد، هیچ ردی از "رسید فرستاده شد" توی لاگ نمی‌موند و امکان نداشت بشه فهمید یک
+        // سفارش خاص واقعاً به ادمین رسیده یا نه. الان با warn ثبت می‌شه تا همیشه (چه موفق چه
+        // ناموفق) قابل جستجو با کد پیگیری سفارش باشه.
+        FaoximaLogger::warn('Receipt uploaded', [
             'order'         => $orderId,
             'user_id'       => $this->user['id'],
             'amount'        => $amount,
@@ -201,7 +223,8 @@ final class PaymentReceiptHandler extends BaseHandler
             CURLOPT_POST           => true,
             CURLOPT_POSTFIELDS     => $post,
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => 30,
+            CURLOPT_TIMEOUT        => 10,
+            CURLOPT_CONNECTTIMEOUT => 5,
             CURLOPT_SSL_VERIFYPEER => true,
         ]);
         $response = curl_exec($ch);
@@ -245,7 +268,8 @@ final class PaymentReceiptHandler extends BaseHandler
             CURLOPT_POST           => true,
             CURLOPT_POSTFIELDS     => http_build_query($payload),
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => 15,
+            CURLOPT_TIMEOUT        => 8,
+            CURLOPT_CONNECTTIMEOUT => 4,
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_HTTPHEADER     => ['Content-Type: application/x-www-form-urlencoded'],
         ]);
@@ -273,7 +297,8 @@ final class PaymentReceiptHandler extends BaseHandler
             CURLOPT_POST           => true,
             CURLOPT_POSTFIELDS     => http_build_query($payload),
             CURLOPT_RETURNTRANSFER => true,
-            CURLOPT_TIMEOUT        => 15,
+            CURLOPT_TIMEOUT        => 8,
+            CURLOPT_CONNECTTIMEOUT => 4,
             CURLOPT_SSL_VERIFYPEER => true,
             CURLOPT_HTTPHEADER     => ['Content-Type: application/x-www-form-urlencoded'],
         ]);

@@ -148,8 +148,15 @@ final class PaymentInitHandler extends BaseHandler
                 });
                 return;
 
-            case 'zarinpey':
-                $this->handleGateway('zarinpey', $amount, function ($amt, $orderId) {
+                        case 'zarinpey':
+                // [BUGFIX] Payment_report.Payment_Method باید 'zarinpay' ذخیره بشه، نه 'zarinpey'.
+                // 'zarinpey' فقط کلید UI/تنظیمات هست (دکمه، minbalancezarinpey و...)؛ همه‌ی مسیرهای
+                // دیگه (فلوی کلاسیک بات توی user_flow.php، payment/ZarinPay/pay.php، payment_expire*.php،
+                // و از همه مهم‌تر پولر cronbot/zarinpaycheck.php) دنبال 'zarinpay' توی این ستون می‌گردن.
+                // قبل از این فیکس، فاکتورهای زرین‌پی/CubePay ساخته‌شده از مینی‌اپ با 'zarinpey' ذخیره
+                // می‌شدن و پولر هیچ‌وقت پیداشون نمی‌کرد — یعنی کاربری که با اسکن QR مستقیم از اپ بانک
+                // پرداخت می‌کرد (بدون برگشتن به مرورگر) هیچ safety-net ای نداشت.
+                $this->handleGateway('zarinpay', $amount, function ($amt, $orderId) {
                     return createPayZarinpey($amt, $orderId, (string)($this->user['id'] ?? ''));
                 }, function ($pay) {
                     return $pay && !empty($pay['url']) ? $pay['url'] : null;
@@ -340,7 +347,9 @@ final class PaymentInitHandler extends BaseHandler
         $shownAmount = $amount;
         $rialAmount  = $amount * 10;
         if ($autoConfirm) {
-            $shownAmount = $amount + random_int(0, 2000);
+            error_log("Amount before random: " . $amount);
+            error_log("Shown amount: " . $shownAmount);
+            $shownAmount = $amount + random_int(1, 10);
             $rialAmount  = $shownAmount * 10;
             update('user', 'Processing_value', $shownAmount, 'id', $this->user['id']);
         }
@@ -618,6 +627,11 @@ final class PaymentInitHandler extends BaseHandler
             $params[':cb'] = $this->chargeBonus;
         }
 
+        // [FIX] این درج قبلاً fail-open بود: اگر خطا می‌داد فقط لاگ می‌شد و متد
+        // عادی ادامه پیدا می‌کرد. یعنی مینی‌اپ شماره کارت و کد پیگیری را به مشتری
+        // نشان می‌داد در حالی که هیچ فاکتوری در دیتابیس ساخته نشده بود. مشتری واریز
+        // می‌کرد، و بعد دکمه‌ی «ارسال رسید» به فاکتوری می‌رسید که وجود نداشت.
+        // حالا خطا به بالا پرتاب می‌شود تا صفحه‌ی پرداخت اصلاً ساخته نشود.
         try {
             $pdo = FaoximaDb::pdo();
             $sql = 'INSERT INTO Payment_report (' . implode(', ', $cols) . ') VALUES (' . implode(', ', $vals) . ')';
@@ -625,6 +639,7 @@ final class PaymentInitHandler extends BaseHandler
             $stmt->execute($params);
         } catch (Throwable $e) {
             FaoximaLogger::warn('Payment_report insert failed', ['err' => $e->getMessage(), 'has_ext' => $extId !== null]);
+            FaoximaResponse::fail(503, '❌ ثبت فاکتور با خطا مواجه شد. لطفاً چند لحظه دیگر دوباره تلاش کنید.');
         }
     }
 

@@ -271,14 +271,66 @@ $jsUrl       = htmlspecialchars($assetPrefix . 'assets/v0.0.2/app.js?v=' . $cach
         });
 
 
+        // [FIX] این واچ‌داگ قبلاً فقط صفحه‌ی خطا نشان می‌داد و کاربر با یک صفحه‌ی
+        // مرده تنها می‌ماند. طبق logs/client-*.log این حالت واقعاً رخ می‌دهد و
+        // تقریباً همیشه علتش گیر کردنِ دانلودِ یکی از ماژول‌های JS است (شبکه‌ی
+        // ناپایدار/فیلترینگ یا کشِ خرابِ مرورگر) — نه خطای کد. یک بار تلاش مجدد با
+        // آدرسِ کش‌شکن معمولاً همان لحظه مشکل را حل می‌کند، پس قبل از نشان دادن
+        // خطا خودمان یک بار دوباره تلاش می‌کنیم. اگر باز هم نشد، حالا حداقل
+        // می‌دانیم کدام فایل‌ها اصلاً دانلود نشده‌اند و همان را لاگ می‌کنیم.
+        function failedModuleList() {
+            try {
+                var loaded = {};
+                var entries = performance.getEntriesByType('resource') || [];
+                for (var i = 0; i < entries.length; i++) {
+                    var n = entries[i].name || '';
+                    if (n.indexOf('.js') === -1) continue;
+                    loaded[n.split('?')[0].split('/').pop()] = entries[i].transferSize;
+                }
+                var names = Object.keys(loaded);
+                var zero = [];
+                for (var j = 0; j < names.length; j++) {
+                    if (loaded[names[j]] === 0) zero.push(names[j]);
+                }
+                return 'js_seen=' + names.length + (zero.length ? ' empty=' + zero.join(',') : '');
+            } catch (e) { return 'diag_failed'; }
+        }
+
+        var retried = false;
+        function retryModuleOnce() {
+            if (retried) return false;
+            retried = true;
+            try {
+                var original = document.querySelector('script[type="module"][src]');
+                if (!original || !original.src) return false;
+                var base = original.src.split('#')[0];
+                var sep = base.indexOf('?') === -1 ? '?' : '&';
+                var retryTag = document.createElement('script');
+                retryTag.type = 'module';
+                retryTag.src = base + sep + 'retry=' + Date.now();
+                document.body.appendChild(retryTag);
+                return true;
+            } catch (e) { return false; }
+        }
+
         setTimeout(function () {
-            if (!window.__FAOXIMA_APP_STARTED__) {
-                postLog('error',
-                    'Module entry never executed within 6s — likely a JS module 404 or static-import error.',
-                    'watchdog', '');
+            if (window.__FAOXIMA_APP_STARTED__) return;
+            postLog('warn',
+                'Module entry never executed within 6s — retrying once with a cache-busted URL.',
+                'watchdog', failedModuleList());
+            if (!retryModuleOnce()) {
                 showFallback('بارگذاری برنامه ناموفق بود',
                     'یکی از فایل‌های JS بارگذاری نشد یا خطای پیوند ماژول داشت.', '');
+                return;
             }
+            setTimeout(function () {
+                if (window.__FAOXIMA_APP_STARTED__) return;
+                postLog('error',
+                    'Module entry never executed — retry also failed.',
+                    'watchdog', failedModuleList());
+                showFallback('بارگذاری برنامه ناموفق بود',
+                    'اتصال شما ناپایدار است یا یکی از فایل‌های برنامه دانلود نشد. لطفاً یک بار دیگر تلاش کنید.', '');
+            }, 8000);
         }, 6000);
     })();
 </script>

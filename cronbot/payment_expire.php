@@ -65,7 +65,52 @@ $rows = $stmt->fetchAll(PDO::FETCH_ASSOC);
 
 $expireStmt = $pdo->prepare("UPDATE Payment_report SET payment_Status = 'expire' WHERE id_order = :o AND payment_Status = 'Unpaid'");
 
+$zarinpayLastChanceToken = null;
 foreach ($rows as $result) {
+    // آخرین شانس قبل از انقضای دائمی: اگه این فاکتور زرین‌پی/CubePay هست،
+    // یه بار دیگه مستقیم از درگاه استعلام می‌گیریم. کاربرهایی که با اسکن QR
+    // مستقیم از اپ بانک پرداخت کرده‌ن هیچ‌وقت به مرورگر برنمی‌گردن، پس
+    // zarinpaycheck.php (کرون پولر هر ۱ دقیقه) معمولاً قبل از این مرحله
+    // گرفته‌تش؛ این فقط یه fallback برای وقتیه که اون کرون بنا به دلیلی
+    // (مثلاً قطعی موقت) این فاکتور رو رد کرده باشه.
+    if (($result['Payment_Method'] ?? '') === 'zarinpay') {
+        if ($zarinpayLastChanceToken === null) {
+            $zarinpayLastChanceToken = getPaySettingValue('token_zarinpey') ?: '';
+        }
+        if ($zarinpayLastChanceToken !== '') {
+            $note = trim((string) ($result['dec_not_confirmed'] ?? ''));
+            $decodedNote = json_decode($note, true);
+            $authority = (is_array($decodedNote) && !empty($decodedNote['authority'])) ? (string) $decodedNote['authority'] : $note;
+            if ($authority !== '') {
+                $ch = curl_init('https://cubevps.ir/smspay/api/verify-payment.php');
+                curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+                curl_setopt($ch, CURLOPT_POST, true);
+                curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode(['authority' => $authority], JSON_UNESCAPED_UNICODE));
+                curl_setopt($ch, CURLOPT_HTTPHEADER, [
+                    'Content-Type: application/json',
+                    'Authorization: Bearer ' . $zarinpayLastChanceToken,
+                ]);
+                curl_setopt($ch, CURLOPT_TIMEOUT, 10);
+                $resp = @curl_exec($ch);
+                curl_close($ch);
+                $verifyResult = json_decode((string) $resp, true);
+                $isVerified = is_array($verifyResult) && (!empty($verifyResult['success']) || (($verifyResult['status'] ?? '') === 'verified'));
+                if ($isVerified) {
+                    if (is_file(__DIR__ . '/../lib/PaymentConfirm.php')) {
+                        require_once __DIR__ . '/../lib/PaymentConfirm.php';
+                    }
+                    if (function_exists('payment_confirm_paid')) {
+                        payment_confirm_paid((string) $result['id_order'], '', [
+                            'method' => 'زرین پی',
+                            'extra_lines' => ['🔁 تایید در آخرین لحظه قبل از انقضا'],
+                        ]);
+                    }
+                    continue;
+                }
+            }
+        }
+    }
+
     $status_var_map = [
         'cart to cart' =>  $datatextbot['carttocart'],
         'aqayepardakht' => $datatextbot['aqayepardakht'],
@@ -96,6 +141,27 @@ foreach ($rows as $result) {
     if ($expireStmt->rowCount() !== 1) {
         continue;
     }
+    // [FIX] card-to-card ("cart to cart") rows that never even reached the
+    // receipt-submitted ("waiting") stage have no admin review pending on them —
+    // there's nothing left to look at, so leaving them sitting as "expire" forever
+    // just means the admin has to find and delete each one by hand. Deleting them
+    // outright here closes that gap. Rows that DID reach "waiting" (a receipt/photo
+    // was actually submitted and needs human review) are untouched by this whole
+    // loop in the first place, since this query only ever matches payment_Status =
+    // 'Unpaid' — so a real pending receipt is never silently discarded.
+    // [FIX] این ردیف‌ها دیگر حذف نمی‌شوند — فقط 'expire' می‌مانند.
+    //
+    // حذفِ فوری یک حالت واقعی را خراب می‌کرد: مشتری فاکتور کارت‌به‌کارت می‌سازد،
+    // می‌رود اپ بانک، واریز می‌کند و با عکس رسید برمی‌گردد. اگر این رفت‌وبرگشت
+    // بیشتر از ۳۰ دقیقه طول بکشد (که کاملاً عادی است)، این کرون ردیف را قبل از
+    // برگشتنِ او پاک کرده بود. بعد دکمه‌ی «ارسال رسید» در مینی‌اپ به ردیفی
+    // می‌رسید که دیگر وجود ندارد و از دید مشتری اصلاً کار نمی‌کرد — با اینکه پول
+    // واقعاً واریز شده بود و هیچ ردی هم برای ادمین باقی نمی‌ماند.
+    //
+    // نگه داشتن ردیف با وضعیت 'expire' هزینه‌ای ندارد: مسیر ارسال رسید فقط
+    // فاکتورهای 'paid' را رد می‌کند، پس مشتری هنوز می‌تواند رسیدش را بفرستد و
+    // ادمین تصمیم بگیرد. پاکسازی هم از قبل وجود دارد: دکمه‌ی «بهینه سازی ربات»
+    // در پنل ادمین همه‌ی ردیف‌های 'expire' و 'reject' را یکجا حذف می‌کند.
     if (function_exists('rx_release_unpaid_discount')) {
         $rxRefTime = isValidDate($result['time'] ?? '') ? strtotime(str_replace('/', '-', (string)$result['time'])) : null;
         rx_release_unpaid_discount((string)$result['id_user'], null, $rxRefTime ?: null);
