@@ -4802,9 +4802,14 @@ $caption";
     // crashed silently or fell straight through to the "cashback + payment approved" messaging below
     // as if the service had actually been delivered. nm_safe_direct_payment() catches both cases and
     // tells us which one happened.
+    // [FIX] پیام دوتایی: به DirectPayment می‌گوییم پیام تاییدِ ادمین را خودش نفرستد
+    // و فقط متنش را برگرداند، تا در انتهای همین هندلر یک پیامِ واحد ساخته شود.
+    $GLOBALS['rx_admin_confirm_merge'] = true;
+    $GLOBALS['rx_dp_admin_confirm_text'] = null;
     $__directPaymentOk = function_exists('nm_safe_direct_payment')
         ? nm_safe_direct_payment($order_id)
         : (DirectPayment($order_id) !== false);
+    $GLOBALS['rx_admin_confirm_merge'] = false;
     if (!$__directPaymentOk) {
         $__retryRefundKb = json_encode([
             'inline_keyboard' => [
@@ -4859,13 +4864,23 @@ $caption";
 
     // آپدیت آنیِ پیامِ همهٔ ادمین‌ها؛ دیگه لازم نیست ادمین‌های دیگه خودشون رو
     // اشتباهی روی همین رسید بزنن تا تازه بفهمن قبلاً تایید شده.
-    $rx_confirmedText = "✅ پرداخت تایید شد
+    // متنی که DirectPayment ساخته (جزئیات سرویس/تمدید) به‌جای یک پیام جدا، اینجا
+    // به اطلاعات تایید چسبانده می‌شود تا ادمین یک پیامِ کامل ببیند نه دو تا.
+    $rx_dpText = isset($GLOBALS['rx_dp_admin_confirm_text']) ? trim((string) $GLOBALS['rx_dp_admin_confirm_text']) : '';
+    $GLOBALS['rx_dp_admin_confirm_text'] = null;
+    if ($rx_dpText !== '') {
+        $rx_confirmedText = $rx_dpText . "
+💎 موجودی بعد از تایید : {$Balance_id['Balance']}
+👤 تایید شده توسط ادمین: <code>$from_id</code>";
+    } else {
+        $rx_confirmedText = "✅ پرداخت تایید شد
 👤 شناسه کاربر: <code>{$Balance_id['id']}</code>
 🛒 کد پیگیری پرداخت: {$Payment_report['id_order']}
 ⚜️ نام کاربری: @{$Balance_id['username']}
 💎 موجودی بعد از تایید : {$Balance_id['Balance']}
 💸 مبلغ پرداختی: $format_price_cart تومان
 👤 تایید شده توسط ادمین: <code>$from_id</code>";
+    }
     $rx_confirmedKb = json_encode([
         'inline_keyboard' => [
             [['text' => "✅ تایید شده", 'callback_data' => "confirmpaid"]],

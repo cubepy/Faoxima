@@ -1326,7 +1326,17 @@ $textonebuy
 ✍️ توضیحات : {$paymentNote}
 
 ";
-            Editmessagetext($from_id, $message_id, $textconfrom, $Confirm_pay);
+            // [FIX] پیام دوتایی هنگام تایید رسید.
+            // وقتی ادمین رسیدِ عکسی را تایید می‌کند، Editmessagetext آن پیام عکس را
+            // حذف و یک پیام متنی تازه می‌فرستد. هندلر تاییدِ ادمین هم بعد از برگشتن
+            // از این تابع دوباره همین کار را می‌کند — نتیجه دو پیام جدا با اطلاعات
+            // متفاوت. اگر فراخوان اعلام کرده باشد که خودش پیام نهایی را می‌سازد،
+            // اینجا فقط متن را تحویلش می‌دهیم تا یک پیامِ واحد ساخته شود.
+            if (!empty($GLOBALS['rx_admin_confirm_merge'])) {
+                $GLOBALS['rx_dp_admin_confirm_text'] = $textconfrom;
+            } else {
+                Editmessagetext($from_id, $message_id, $textconfrom, $Confirm_pay);
+            }
         }
     } elseif ($steppay[0] == "getextenduser") {
         $balanceformatsell = number_format(select("user", "Balance", "id", $Balance_id['id'], "select")['Balance'], 0);
@@ -1507,7 +1517,17 @@ $textonebuy
 ✍️ توضیحات : {$paymentNote}
 
 ";
-            Editmessagetext($from_id, $message_id, $textconfrom, $Confirm_pay);
+            // [FIX] پیام دوتایی هنگام تایید رسید.
+            // وقتی ادمین رسیدِ عکسی را تایید می‌کند، Editmessagetext آن پیام عکس را
+            // حذف و یک پیام متنی تازه می‌فرستد. هندلر تاییدِ ادمین هم بعد از برگشتن
+            // از این تابع دوباره همین کار را می‌کند — نتیجه دو پیام جدا با اطلاعات
+            // متفاوت. اگر فراخوان اعلام کرده باشد که خودش پیام نهایی را می‌سازد،
+            // اینجا فقط متن را تحویلش می‌دهیم تا یک پیامِ واحد ساخته شود.
+            if (!empty($GLOBALS['rx_admin_confirm_merge'])) {
+                $GLOBALS['rx_dp_admin_confirm_text'] = $textconfrom;
+            } else {
+                Editmessagetext($from_id, $message_id, $textconfrom, $Confirm_pay);
+            }
         }
     } elseif ($steppay[0] == "getextravolumeuser") {
         $steppay = explode("%", $steppay[1]);
@@ -1593,7 +1613,17 @@ $textonebuy
 💎 موجودی قبل ازافزایش موجودی : {$Balance_id['Balance']}
 💸 مبلغ پرداختی: $format_price_cart تومان
 ";
-            Editmessagetext($from_id, $message_id, $textconfrom, $Confirm_pay);
+            // [FIX] پیام دوتایی هنگام تایید رسید.
+            // وقتی ادمین رسیدِ عکسی را تایید می‌کند، Editmessagetext آن پیام عکس را
+            // حذف و یک پیام متنی تازه می‌فرستد. هندلر تاییدِ ادمین هم بعد از برگشتن
+            // از این تابع دوباره همین کار را می‌کند — نتیجه دو پیام جدا با اطلاعات
+            // متفاوت. اگر فراخوان اعلام کرده باشد که خودش پیام نهایی را می‌سازد،
+            // اینجا فقط متن را تحویلش می‌دهیم تا یک پیامِ واحد ساخته شود.
+            if (!empty($GLOBALS['rx_admin_confirm_merge'])) {
+                $GLOBALS['rx_dp_admin_confirm_text'] = $textconfrom;
+            } else {
+                Editmessagetext($from_id, $message_id, $textconfrom, $Confirm_pay);
+            }
         }
         update("invoice", "Status", "active", "id_invoice", $nameloc['id_invoice']);
         $text_report = "⭕️ یک کاربر حجم اضافه خریده است
@@ -1699,7 +1729,17 @@ $textonebuy
 💎 موجودی قبل ازافزایش موجودی : {$Balance_id['Balance']}
 💸 مبلغ پرداختی: $format_price_cart تومان
 ";
-            Editmessagetext($from_id, $message_id, $textconfrom, $Confirm_pay);
+            // [FIX] پیام دوتایی هنگام تایید رسید.
+            // وقتی ادمین رسیدِ عکسی را تایید می‌کند، Editmessagetext آن پیام عکس را
+            // حذف و یک پیام متنی تازه می‌فرستد. هندلر تاییدِ ادمین هم بعد از برگشتن
+            // از این تابع دوباره همین کار را می‌کند — نتیجه دو پیام جدا با اطلاعات
+            // متفاوت. اگر فراخوان اعلام کرده باشد که خودش پیام نهایی را می‌سازد،
+            // اینجا فقط متن را تحویلش می‌دهیم تا یک پیامِ واحد ساخته شود.
+            if (!empty($GLOBALS['rx_admin_confirm_merge'])) {
+                $GLOBALS['rx_dp_admin_confirm_text'] = $textconfrom;
+            } else {
+                Editmessagetext($from_id, $message_id, $textconfrom, $Confirm_pay);
+            }
         }
         update("invoice", "Status", "active", "id_invoice", $nameloc['id_invoice']);
         $text_report = "⭕️ یک کاربر زمان اضافه خریده است
@@ -1734,7 +1774,17 @@ $textonebuy
 💸 مبلغ پرداختی: $format_price_cart تومان
 💎 موجودی قبل ازافزایش موجودی : {$Balance_id['Balance']}
 ✍️ توضیحات : {$paymentNote}";
-            Editmessagetext($from_id, $message_id, $textconfrom, $Confirm_pay);
+            // [FIX] پیام دوتایی هنگام تایید رسید.
+            // وقتی ادمین رسیدِ عکسی را تایید می‌کند، Editmessagetext آن پیام عکس را
+            // حذف و یک پیام متنی تازه می‌فرستد. هندلر تاییدِ ادمین هم بعد از برگشتن
+            // از این تابع دوباره همین کار را می‌کند — نتیجه دو پیام جدا با اطلاعات
+            // متفاوت. اگر فراخوان اعلام کرده باشد که خودش پیام نهایی را می‌سازد،
+            // اینجا فقط متن را تحویلش می‌دهیم تا یک پیامِ واحد ساخته شود.
+            if (!empty($GLOBALS['rx_admin_confirm_merge'])) {
+                $GLOBALS['rx_dp_admin_confirm_text'] = $textconfrom;
+            } else {
+                Editmessagetext($from_id, $message_id, $textconfrom, $Confirm_pay);
+            }
         }
         $__creditFmt = number_format($__creditAmount, 0);
         sendmessage($Payment_report['id_user'], "💎 کاربر گرامی مبلغ {$__creditFmt} تومان به کیف پول شما واریز گردید با تشکراز پرداخت شما.
