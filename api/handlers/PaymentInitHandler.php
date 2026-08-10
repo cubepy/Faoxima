@@ -60,9 +60,13 @@ final class PaymentInitHandler extends BaseHandler
         }
 
 
-        update('user', 'Processing_value', $amount, 'id', $this->user['id']);
-        $this->user['Processing_value'] = $amount;
-
+        // [SECURITY] مبلغ از سمت کلاینت می‌آید و تا اینجا فقط با حداقل/حداکثرِ عمومیِ
+        // روش پرداخت سنجیده شده — نه با بدهیِ واقعیِ این سفارش. پایین‌دست هم جلویش را
+        // نمی‌گیرد: هنگام تحویل، سهم کیف پول برابرِ (قیمت فاکتور − مبلغ پرداختی) حساب
+        // می‌شود و با GREATEST(0, ...) کسر می‌گردد، پس اگر کاربر مبلغ کمتری بفرستد
+        // کسری بی‌صدا صفر می‌شود و سرویس کامل تحویل داده می‌شود.
+        // بنابراین مبلغِ لازم باید همین‌جا سمت سرور محاسبه و اجبار شود.
+        $serverRequired = null;
 
         $renewUsername = FaoximaInput::nullableString($this->data, 'renew_username');
         $purchaseUsername = FaoximaInput::nullableString($this->data, 'purchase_username');
@@ -83,6 +87,10 @@ final class PaymentInitHandler extends BaseHandler
                 FaoximaResponse::fail(409, '❌ مراحل تمدید کامل نشده است. لطفاً تمدید را از ابتدا انجام دهید.');
             }
 
+            // مبلغِ تمدید را ServiceRenewConfirmHandler سمت سرور حساب کرده و در
+            // Processing_value گذاشته است؛ همان مرجع است، نه عددِ کلاینت.
+            $serverRequired = (int) round((float) ($this->user['Processing_value'] ?? 0));
+
         } elseif ($purchaseUsername !== null && $purchaseUsername !== '') {
 
 
@@ -94,6 +102,19 @@ final class PaymentInitHandler extends BaseHandler
             if ($unpaidInvoiceExists === 0) {
                 FaoximaResponse::fail(404, '❌ فاکتور خرید ناتمامی برای این نام کاربری پیدا نشد.');
             }
+
+            // بدهیِ واقعی = قیمت فاکتور منهای موجودی کیف پول (هرگز منفی).
+            $invoicePrice = FaoximaDb::fetchScalar(
+                "SELECT price_product FROM invoice
+                  WHERE username = :u AND id_user = :uid AND Status = 'unpaid'
+                  ORDER BY id_invoice DESC LIMIT 1",
+                [':u' => $purchaseUsername, ':uid' => $this->user['id']]
+            );
+            if ($invoicePrice !== null && $invoicePrice !== false) {
+                $walletNow = (float) ($this->user['Balance'] ?? 0);
+                $serverRequired = (int) ceil(max(0, (float) $invoicePrice - $walletNow));
+            }
+
             update('user', 'Processing_value_one', $purchaseUsername, 'id', $this->user['id']);
             update('user', 'Processing_value_tow', 'getconfigafterpay', 'id', $this->user['id']);
             $this->user['Processing_value_one'] = $purchaseUsername;
@@ -121,6 +142,23 @@ final class PaymentInitHandler extends BaseHandler
             $this->user['Processing_value_one'] = '';
             $this->user['Processing_value_tow'] = '';
         }
+
+        // اجبارِ مبلغ: برای خرید و تمدید، مبلغِ لازم را سرور تعیین می‌کند. مبلغِ کمتر
+        // رد می‌شود (وگرنه سرویس کامل با پرداختِ ناقص تحویل می‌شد). مبلغِ بیشتر هم
+        // پذیرفته نمی‌شود تا کاربر اشتباهی اضافه واریز نکند.
+        if ($serverRequired !== null && $serverRequired > 0 && $amount !== $serverRequired) {
+            FaoximaLogger::warn('payment_init amount mismatch', [
+                'user'     => $this->user['id'] ?? null,
+                'sent'     => $amount,
+                'required' => $serverRequired,
+                'method'   => $method,
+            ]);
+            FaoximaResponse::fail(422,
+                '❌ مبلغ این فاکتور ' . number_format($serverRequired) . ' تومان است. لطفاً صفحه را ببندید و مراحل را از ابتدا انجام دهید.');
+        }
+
+        update('user', 'Processing_value', $amount, 'id', $this->user['id']);
+        $this->user['Processing_value'] = $amount;
 
         switch ($method) {
             case 'carttocart':

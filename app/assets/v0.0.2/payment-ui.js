@@ -107,7 +107,7 @@ export function renderCardToCard(d) {
                 <p class="section-title">${icon('fileText')} ارسال رسید پرداخت</p>
                 <p class="muted" style="font-size:13px">پس از واریز، عکس رسید را آپلود کنید تا برای ادمین ارسال شود.</p>
 
-                <input type="file" id="receipt-file" accept="image/*" capture="environment" style="display:none" />
+                <input type="file" id="receipt-file" accept="image/*" style="display:none" />
                 <button type="button" id="receipt-pick" class="btn btn-primary btn-block mt-sm">
                     ${icon('download', 'class="ico ico-leading"')}
                     <span>انتخاب عکس رسید</span>
@@ -177,6 +177,12 @@ export function wireCardToCard(view, d, opts = {}) {
         $pick.disabled = true;
         $label.textContent = 'در حال ارسال…';
 
+        // [FIX] قبلاً این fetch هیچ timeout ای نداشت — اگه اینترنت کاربر ضعیف بود یا سرور
+        // کند جواب می‌داد، دکمه برای همیشه روی «در حال ارسال...» می‌موند بدون هیچ راهی برای
+        // لغو/تلاش مجدد. الان بعد از 60 ثانیه درخواست خودکار لغو میشه و خطای قابل‌فهم نشون
+        // داده میشه تا کاربر بتونه دوباره تلاش کنه.
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), 60000);
         try {
             const fd = new FormData();
             fd.append('order_id', d.order_id);
@@ -189,7 +195,9 @@ export function wireCardToCard(view, d, opts = {}) {
                 method: 'POST',
                 headers: { 'Authorization': 'Bearer ' + (tok || '') },
                 body: fd,
+                signal: controller.signal,
             });
+            clearTimeout(timeoutId);
             let envelope = null;
             try { envelope = await res.json(); } catch (_) {}
             if (!res.ok || !envelope || !envelope.status) {
@@ -227,8 +235,10 @@ export function wireCardToCard(view, d, opts = {}) {
                 try { onSuccess(envelope); } catch (_) {  }
             }
         } catch (err) {
+            clearTimeout(timeoutId);
             hapticNotify('error');
-            toast(err.message || 'خطا در ارسال رسید', 'error', 5000);
+            const isAbort = err && err.name === 'AbortError';
+            toast(isAbort ? 'ارسال رسید طولانی شد. اتصال اینترنت را بررسی کرده و دوباره تلاش کنید' : (err.message || 'خطا در ارسال رسید'), 'error', 5000);
             $submit.disabled = false;
             $pick.disabled = false;
             $label.textContent = oldLabel;

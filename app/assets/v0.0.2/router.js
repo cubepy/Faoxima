@@ -5,6 +5,10 @@ import { buy as buyPage } from './pages/buy.js';
 import { account as accountPage } from './pages/account.js';
 import { settings as settingsPage } from './pages/settings.js';
 import { recharge as rechargePage } from './pages/recharge.js';
+import { faq as faqPage } from './pages/faq.js';
+import { tickets as ticketsPage } from './pages/tickets.js';
+import { walletHistory as walletHistoryPage } from './pages/wallet-history.js';
+import { testAccount as testAccountPage } from './pages/test-account.js';
 import { icon } from './icons.js';
 
 
@@ -139,6 +143,10 @@ const routes = [
     { pattern: /^\/settings\/?$/,               render: settingsPage,      key: '/account' },
     { pattern: /^\/recharge\/?$/,               render: rechargePage,      key: '/account' },
     { pattern: /^\/watch\/([^/]+)\/?$/,         render: watchResumePage,   key: '/account' },
+    { pattern: /^\/faq\/?$/,                    render: faqPage,           key: '/account' },
+    { pattern: /^\/tickets\/?$/,                render: ticketsPage,       key: '/account' },
+    { pattern: /^\/wallet-history\/?$/,         render: walletHistoryPage, key: '/account' },
+    { pattern: /^\/test-account\/?$/,           render: testAccountPage,   key: '/' },
 ];
 
 let currentCleanup = null;
