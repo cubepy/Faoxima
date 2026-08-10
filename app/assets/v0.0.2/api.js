@@ -199,13 +199,24 @@ export async function call(action, { method = 'GET', params = {}, body = null, r
         init.body = JSON.stringify(payload);
     }
 
+    // [FIX] این fetch هیچ timeout ای نداشت. همه‌ی مسیرهای پولی (purchase،
+    // payment_init، service_renew_confirm، crypto_*) از همین‌جا رد می‌شوند و هر
+    // کدام دکمه‌اش را قبل از await غیرفعال می‌کند؛ پس روی اینترنتِ گیرکرده دکمه
+    // برای همیشه روی «در حال پردازش…» می‌ماند بدون هیچ راه لغو یا تلاش مجدد.
+    const _ctrl = new AbortController();
+    const _to = setTimeout(() => _ctrl.abort(), 60000);
     let res;
     try {
-        res = await fetch(url, init);
+        res = await fetch(url, { ...init, signal: _ctrl.signal });
     } catch (err) {
+        clearTimeout(_to);
+        if (err && err.name === 'AbortError') {
+            throw new ApiError('پاسخی از سرور دریافت نشد. لطفاً دوباره تلاش کنید.', { status: 0, code: 'TIMEOUT' });
+        }
         console.error(`[api:${action}] network error`, err);
         throw new ApiError('اتصال به سرور برقرار نشد.', { status: 0, code: 'NETWORK' });
     }
+    clearTimeout(_to);
 
     const { body: envelope, text, parseError } = await readEnvelope(res);
 

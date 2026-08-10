@@ -191,6 +191,19 @@ async function dispatch() {
         currentCleanup = null;
     }
 
+    // [FIX] ناظرِ درگاه از داخل هندلرِ کلیک استارت می‌شود، پس cleanup اش از render
+    // برنمی‌گردد و اکثر صفحه‌ها آن را دور می‌ریختند. نتیجه: بعد از رفتن کاربر به تبِ
+    // دیگر، polling تا ۳۰ دقیقه ادامه داشت و چون view همان المانِ مشترک است، با
+    // تایید پرداخت صفحه‌ی فعلیِ کاربر ناگهان با کارتِ «پرداخت موفق» جایگزین می‌شد.
+    // gateway-watch خودش cleanup فعال را روی window نگه می‌دارد؛ همین‌جا صداش می‌زنیم.
+    try {
+        const stopWatch = (typeof window !== 'undefined') ? window.__faoximaGatewayWatchCleanup : null;
+        if (typeof stopWatch === 'function') {
+            stopWatch();
+            window.__faoximaGatewayWatchCleanup = null;
+        }
+    } catch (_) {}
+
     let matched = null;
     let params = [];
     for (const r of routes) {

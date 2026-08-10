@@ -173,6 +173,13 @@ export function startGatewayWatch(view, opts) {
             const $label = $check.querySelector('.watch-check-label');
             if ($label) $label.textContent = 'بررسی نهایی';
         }
+
+        // [FIX] onTimeout گرفته می‌شد ولی هیچ‌جا صدا زده نمی‌شد، پس هر سه صفحه‌ی
+        // «زمان انتظار تمام شد» (در payment-ui، recharge و crypto-offline) کدِ مرده
+        // بودند و کاربری که حواسش به صفحه نبود هیچ‌وقت نمی‌فهمید انتظار تمام شده.
+        if (typeof onTimeout === 'function') {
+            try { onTimeout(); } catch (e) { console.warn('[gateway-watch] onTimeout failed', e); }
+        }
     }
 
     function setSubtitle(msg) {

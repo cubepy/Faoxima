@@ -946,6 +946,13 @@ async function renderRenewInlinePayment($panel, pay, reload) {
             return;
         }
 
+        // [FIX] بدون قفل، هر تپ یک payment_init و یک کد پیگیریِ تازه می‌ساخت — دو تپِ
+        // سریع یعنی دو فاکتور، و رسیدی که روی فاکتور اشتباه می‌نشیند.
+        if ($list.dataset.payBusy === '1') return;
+        $list.dataset.payBusy = '1';
+        $list.style.pointerEvents = 'none';
+        $list.style.opacity = '0.6';
+
         try {
             const r = await call('payment_init', {
                 method: 'POST',
@@ -963,6 +970,10 @@ async function renderRenewInlinePayment($panel, pay, reload) {
         } catch (err) {
             hapticNotify('error');
             toast(err.message || 'خطا در آغاز پرداخت', 'error', 4000);
+               } finally {
+            $list.dataset.payBusy = '';
+            $list.style.pointerEvents = '';
+            $list.style.opacity = '';
         }
     });
 }
@@ -1198,6 +1209,13 @@ async function renderExtraInlinePayment($host, pay, reload) {
             return;
         }
 
+        // [FIX] بدون قفل، هر تپ یک payment_init و یک کد پیگیریِ تازه می‌ساخت — دو تپِ
+        // سریع یعنی دو فاکتور، و رسیدی که روی فاکتور اشتباه می‌نشیند.
+        if ($list.dataset.payBusy === '1') return;
+        $list.dataset.payBusy = '1';
+        $list.style.pointerEvents = 'none';
+        $list.style.opacity = '0.6';
+
         try {
             const r = await call('payment_init', {
                 method: 'POST',
@@ -1215,6 +1233,10 @@ async function renderExtraInlinePayment($host, pay, reload) {
         } catch (err) {
             hapticNotify('error');
             toast(err.message || 'خطا در آغاز پرداخت', 'error', 4000);
+               } finally {
+            $list.dataset.payBusy = '';
+            $list.style.pointerEvents = '';
+            $list.style.opacity = '';
         }
     });
 }

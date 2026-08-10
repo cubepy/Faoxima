@@ -72,9 +72,17 @@ final class PurchaseHandler extends BaseHandler
                 FaoximaResponse::fail(422, (string)($dv['reason'] ?? '❌ کد تخفیف نامعتبر است.'));
             }
             $product['price_product'] = MiniDiscount::applyToPrice($dv['row'], (float)$product['price_product']);
-            MiniDiscount::markSellUsed($discountCode, $this->user);
+            // [FIX] علامت‌زدنِ کد به‌عنوان «مصرف‌شده» تا بعد از ساختِ موفقِ سرویس عقب
+            // انداخته شد. قبلاً همین‌جا انجام می‌شد، در حالی که بعد از این نقطه شش مسیرِ
+            // خطا وجود دارد (نام کاربری تکراری، موجودی ناکافی، خطای درج فاکتور، خطای
+            // کسر موجودی، شکستِ createUser و…) و هیچ‌کدام کد را آزاد نمی‌کردند — یعنی
+            // کاربر کدِ یک‌بارمصرفش را بی‌آنکه سرویسی بگیرد از دست می‌داد و ظرفیت
+            // کمپین هم بی‌دلیل می‌سوخت.
+            $rxPendingDiscountCode = $discountCode;
         }
 
+
+        $rxPendingDiscountCode = $rxPendingDiscountCode ?? null;
 
         $orderId = bin2hex(random_bytes(4));
         $customUsername = FaoximaInput::nullableString($this->data, 'custom_username');
@@ -296,6 +304,12 @@ final class PurchaseHandler extends BaseHandler
             FaoximaResponse::serverError('خطایی در ساخت اشتراک رخ داده است با پشتیبانی در ارتباط باشید');
         }
 
+
+        // سرویس واقعاً ساخته شد — حالا کد تخفیف مصرف‌شده حساب می‌شود.
+        if (!empty($rxPendingDiscountCode)) {
+            MiniDiscount::markSellUsed($rxPendingDiscountCode, $this->user);
+            $rxPendingDiscountCode = null;
+        }
 
         $configList = is_array($remote['configs'] ?? null) ? $remote['configs'] : [];
         $configsText = '';
@@ -613,7 +627,14 @@ final class PurchaseHandler extends BaseHandler
         if (!$statusOk || !$hasAffiliate) return;
 
 
-        if (($affiliates['porsant_one_buy'] ?? '') !== 'on_buy_porsant') return;
+        // [FIX] این شرط وارونه بود و سقفِ «خرید اول» را هم اعمال نمی‌کرد.
+        // معنای porsant_one_buy در بقیه‌ی ربات (re/rx/index/user_flow.php:1450)
+        // این است: روشن = پورسانت فقط برای «خرید اولِ» هر زیرمجموعه، خاموش =
+        // پورسانت روی همه‌ی خریدها. مینی‌اپ دقیقاً برعکس عمل می‌کرد: با روشن
+        // بودن روی هر خرید پورسانت می‌داد (پرداختِ بی‌پایان به معرف) و با خاموش
+        // بودن اصلاً پورسانت نمی‌داد. $invoiceCount هم گرفته می‌شد ولی خوانده نمی‌شد.
+        $oneBuyOnly = ($affiliates['porsant_one_buy'] ?? '') === 'on_buy_porsant';
+        if ($oneBuyOnly && $invoiceCount !== 1) return;
 
         $rate = (float)($this->setting['affiliatespercentage'] ?? 0);
         $commission = ((float)$product['price_product'] * $rate) / 100;

@@ -84,12 +84,40 @@ final class MiniDiscount
             return ['ok' => false, 'reason' => '❌ این کد هدیه مبلغی ندارد.'];
         }
 
+        // [FIX] قبلاً اول موجودی واریز می‌شد و بعد limitused با مقدارِ مطلقِ خوانده‌شده
+        // بازنویسی می‌شد (بدون قفل و بدون شرط). دو درخواستِ هم‌زمان هر دو از بررسی
+        // ظرفیتِ بالا رد می‌شدند، هر دو کیف پول را شارژ می‌کردند و هر دو همان عدد را
+        // می‌نوشتند — یعنی یک کدِ یک‌بارمصرف چند بار نقد می‌شد.
+        // حالا اول ظرفیت به‌صورت اتمیک «رزرو» می‌شود و فقط برنده‌ی همان UPDATE
+        // شارژ را انجام می‌دهد. اگر واریز شکست خورد، رزرو پس داده می‌شود.
+        try {
+            $pdo = FaoximaDb::pdo();
+            if ($limitUse > 0) {
+                $claim = $pdo->prepare(
+                    "UPDATE Discount SET limitused = limitused + 1
+                      WHERE code = :c AND CAST(limitused AS UNSIGNED) < :lim"
+                );
+                $claim->execute([':c' => $code, ':lim' => $limitUse]);
+            } else {
+                $claim = $pdo->prepare("UPDATE Discount SET limitused = limitused + 1 WHERE code = :c");
+                $claim->execute([':c' => $code]);
+            }
+            if ($claim->rowCount() !== 1) {
+                return ['ok' => false, 'reason' => '❌ ظرفیت استفاده از این کد هدیه به پایان رسیده است.'];
+            }
+        } catch (Throwable $e) {
+            return ['ok' => false, 'reason' => '❌ خطا در بررسی کد هدیه. لطفاً دوباره تلاش کنید.'];
+        }
+
         $credited = balance_atomic_credit($user['id'], $amount);
         if ($credited === false) {
+            try {
+                $pdo->prepare("UPDATE Discount SET limitused = GREATEST(0, CAST(limitused AS UNSIGNED) - 1) WHERE code = :c")
+                    ->execute([':c' => $code]);
+            } catch (Throwable $e) { /* رزرو پس داده نشد؛ فقط یک ظرفیت می‌سوزد */ }
             return ['ok' => false, 'reason' => '❌ خطا در واریز هدیه. لطفاً دوباره تلاش کنید.'];
         }
 
-        update('Discount', 'limitused', (string)($limitUsed + 1), 'code', $code);
         self::recordConsumed($code, (string)$user['id'], 'gift');
 
         $newBalance = FaoximaDb::fetchScalar('SELECT Balance FROM user WHERE id = :u', [':u' => $user['id']]);

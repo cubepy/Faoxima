@@ -729,6 +729,15 @@ export async function buy(view) {
             }
 
 
+            // [FIX] این هندلر هیچ قفلی نداشت: هر تپ یک payment_init تازه می‌فرستاد و کد
+            // پیگیریِ جدید می‌ساخت. دو تپِ سریع (یا یک تپ دیگر بعد از نمایش شماره کارت)
+            // دو سفارش می‌ساخت؛ کاربر مبلغِ سفارش اول را واریز می‌کرد ولی رسید روی کد
+            // پیگیریِ آخر می‌رفت. تا پاسخ نیامده، کلیک بعدی نادیده گرفته می‌شود.
+            if ($list.dataset.payBusy === '1') return;
+            $list.dataset.payBusy = '1';
+            $list.style.pointerEvents = 'none';
+            $list.style.opacity = '0.6';
+
             try {
                 const r = await call('payment_init', {
                     method: 'POST',
@@ -749,6 +758,10 @@ export async function buy(view) {
             } catch (err) {
                 hapticNotify('error');
                 toast(err.message || 'خطا در آغاز پرداخت', 'error', 4000);
+            } finally {
+                $list.dataset.payBusy = '';
+                $list.style.pointerEvents = '';
+                $list.style.opacity = '';
             }
         });
     }

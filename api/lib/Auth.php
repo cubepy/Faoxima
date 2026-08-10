@@ -60,6 +60,18 @@ final class FaoximaAuth
             throw new RuntimeException('User verification failed');
         }
 
+        // [FIX] برخلاف validateContactResponse، اینجا auth_date هرگز بررسی نمی‌شد.
+        // امضای initData تلگرام تاریخ انقضا ندارد، پس یک رشته‌ی initDataی لو رفته
+        // (لاگ مرورگر، اشتراک‌گذاری لینک، تاریخچه) تا ابد معتبر می‌ماند و می‌شود با آن
+        // به حساب کاربر وارد شد. ۲۴ ساعت همان سقفی است که مسیر تایید شماره استفاده
+        // می‌کند؛ کاربر واقعی هر بار که مینی‌اپ را باز می‌کند initData تازه می‌گیرد.
+        if (isset($initData['auth_date'])) {
+            $authDate = (int) $initData['auth_date'];
+            if ($authDate > 0 && (time() - $authDate) > 86400) {
+                throw new RuntimeException('Telegram init data has expired');
+            }
+        }
+
         $userRaw = $initData['user'] ?? null;
         if (is_string($userRaw)) {
             $userData = json_decode($userRaw, true);

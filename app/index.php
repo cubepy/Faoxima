@@ -84,7 +84,17 @@ if (is_file(__DIR__ . '/../config.php') && is_file(__DIR__ . '/../function.php')
 
 $version = $brandAppVersion;
 
+// [FIX] botUsername هرگز در کانفیگ نبود، و getBotUsername() در telegram.js اول
+// همین کلید را می‌خواند و بعد به initDataUnsafe.bot.username برمی‌گشت که اصلاً
+// فیلدی نیست که تلگرام بدهد — پس همیشه رشته‌ی خالی برمی‌گرداند و دکمه‌ی
+// «شروع گفتگو با پشتیبانی» به‌جای باز کردن ربات، کاربر را به صفحه‌ی خانه می‌برد.
+$botUsernameCfg = '';
+if (isset($usernamebot) && is_string($usernamebot)) {
+    $botUsernameCfg = ltrim(trim($usernamebot), '@');
+}
+
 $config = [
+    'botUsername' => $botUsernameCfg,
     'basename'    => $basename,
     'prefix'      => $prefix,
     'apiUrl'      => $apiUrl,

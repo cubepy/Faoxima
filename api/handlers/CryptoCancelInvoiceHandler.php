@@ -18,7 +18,7 @@ final class CryptoCancelInvoiceHandler extends BaseHandler
         }
 
         $report = FaoximaDb::fetchOne(
-            'SELECT id_order, payment_Status, Payment_Method FROM Payment_report
+            'SELECT id_order, payment_Status, Payment_Method, time FROM Payment_report
               WHERE id_order = :o AND id_user = :u AND source = \'miniapp\' LIMIT 1',
             [':o' => $orderId, ':u' => (string)$this->user['id']]
         );
@@ -46,7 +46,24 @@ final class CryptoCancelInvoiceHandler extends BaseHandler
             FaoximaResponse::fail(409, 'این فاکتور در وضعیتی نیست که قابل لغو باشد (' . $status . ')');
         }
 
-        MiniDiscount::releaseLastUnpaidDiscount((string)$this->user['id']);
+        // [FIX] این فراخوانی بدون کد و بدون زمانِ مرجع بود، و releaseLastUnpaidDiscount
+        // در آن حالت «آخرین کد تخفیفِ مصرف‌شده‌ی کاربر در ۳۰ دقیقه‌ی گذشته» را آزاد
+        // می‌کرد — بدون هیچ ارتباطی با فاکتوری که لغو می‌شود. یعنی کاربر می‌توانست یک
+        // خرید تخفیف‌دار را کامل کند (سرویس تحویل، کد مصرف شد)، بعد یک فاکتور دیگر
+        // بسازد و لغو کند تا همان کد دوباره آزاد شود — و این را بی‌نهایت تکرار کند.
+        // حالا زمانِ ساختِ همین فاکتور به‌عنوان مرجع داده می‌شود تا فقط کدی آزاد شود
+        // که واقعاً به این فاکتور مربوط است.
+        $rxCancelRefTime = null;
+        $rxCancelTimeRaw = trim((string)($report['time'] ?? ''));
+        if ($rxCancelTimeRaw !== '') {
+            $rxCancelParsed = strtotime(str_replace('/', '-', $rxCancelTimeRaw));
+            if ($rxCancelParsed !== false && $rxCancelParsed > 0) {
+                $rxCancelRefTime = $rxCancelParsed;
+            }
+        }
+        if ($rxCancelRefTime !== null) {
+            MiniDiscount::releaseLastUnpaidDiscount((string)$this->user['id'], null, $rxCancelRefTime);
+        }
 
         try {
             $pdo = FaoximaDb::pdo();
