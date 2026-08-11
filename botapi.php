@@ -5,6 +5,22 @@ if (!function_exists('rx_kb_debug_log')) {
         return;
     }
 }
+// [FIX] این تابع در ~۲۴ فایل صدا زده می‌شود (جایگزینِ کدِ قدیمیِ
+// strlen($setting['Channel_Report']) > 0) ولی تعریفش هیچ‌جای پروژه نبود، پس هر
+// مسیری که به آن می‌رسید با Fatal «Call to undefined function reportChannelIsSet»
+// می‌مرد — از جمله تاییدِ پرداختِ کارت‌به‌کارت توسط ادمین: پرداخت اتمیک «paid»
+// می‌شد، بعد همین‌جا fatal می‌شد؛ ادمین «خطای موقتی» می‌دید و تلاش دوم «قبلاً
+// بررسی شده». تعریف با function_exists محافظت شده تا اگر بعداً نسخه‌ی اصلی هم
+// اضافه شد، تداخلی پیش نیاید.
+if (!function_exists('reportChannelIsSet')) {
+    function reportChannelIsSet($setting) {
+        if (!is_array($setting)) {
+            return false;
+        }
+        $channel = $setting['Channel_Report'] ?? '';
+        return strlen((string) $channel) > 0;
+    }
+}
 function telegram($method, $datas = [], $token = null)
 {
     global $APIKEY, $telegramCurlTimeout;
