@@ -21,6 +21,59 @@ if (!function_exists('reportChannelIsSet')) {
         return strlen((string) $channel) > 0;
     }
 }
+// [FIX] rxResolveUsernameCollision و rxUsernameTaken در user_flow.php صدا زده می‌شوند
+// (هنگام خرید، برای حل تداخل نام کاربری) ولی تعریفشان در database_helpers_2.php بود که
+// روی این سرور به‌روز نشده — پس هر خریدی که به تداخل نام می‌خورد با «Call to undefined
+// function rxResolveUsernameCollision» می‌مرد و کاربر «خطای موقتی» می‌دید و اصلاً
+// نمی‌توانست خرید کند. اینجا (که هر مسیری لودش می‌کند) با function_exists تعریف می‌شوند
+// تا اگر نسخه‌ی اصلی هم بعداً روی database_helpers_2.php آمد، تداخلی پیش نیاید.
+if (!function_exists('rxUsernameTaken')) {
+    function rxUsernameTaken($name_panel, $candidate, $usernameinvoice)
+    {
+        global $ManagePanel;
+        if (is_array($usernameinvoice) && in_array($candidate, $usernameinvoice)) {
+            return true;
+        }
+        try {
+            $panelManager = (isset($ManagePanel) && $ManagePanel instanceof ManagePanel) ? $ManagePanel : new ManagePanel();
+            $DataUserOut = $panelManager->DataUser($name_panel, $candidate);
+        } catch (Throwable $rxTakenErr) {
+            return true;
+        }
+        return isset($DataUserOut['username']);
+    }
+}
+if (!function_exists('rxResolveUsernameCollision')) {
+    function rxResolveUsernameCollision($marzban_list_get, $username_ac, $usernameinvoice, $from_id)
+    {
+        $method = $marzban_list_get['MethodUsername'] ?? '';
+        $panelName = $marzban_list_get['name_panel'] ?? '';
+        $globalSeq = in_array($method, ["متن دلخواه + عدد ترتیبی", "متن دلخواه نماینده + عدد ترتیبی"]);
+        $userSeq = in_array($method, ["نام کاربری + عدد به ترتیب", "آیدی عددی+عدد ترتیبی"]);
+        if (($globalSeq || $userSeq) && preg_match('/^(.*)_(\d+)$/', $username_ac, $rxParts)) {
+            $base = $rxParts[1];
+            $number = intval($rxParts[2]);
+            for ($i = 1; $i <= 30; $i++) {
+                $candidate = strtolower($base . "_" . ($number + $i));
+                if (!rxUsernameTaken($panelName, $candidate, $usernameinvoice)) {
+                    if ($globalSeq) {
+                        update("setting", "numbercount", $number + $i);
+                    } else {
+                        update("user", "number_username", $number + $i, "id", $from_id);
+                    }
+                    return $candidate;
+                }
+            }
+        }
+        for ($i = 0; $i < 10; $i++) {
+            $candidate = strtolower($username_ac . "_" . rand(100, 999));
+            if (!rxUsernameTaken($panelName, $candidate, $usernameinvoice)) {
+                return $candidate;
+            }
+        }
+        return strtolower($username_ac . "_" . rand(1000000, 9999999));
+    }
+}
 function telegram($method, $datas = [], $token = null)
 {
     global $APIKEY, $telegramCurlTimeout;

@@ -621,6 +621,7 @@ function generateUsername($from_id, $Metode, $username, $randomString, $text, $n
         return $usernamecustom . "_" . $user['number_username'];
     }
 }
+if (!function_exists('rxUsernameTaken')) {
 function rxUsernameTaken($name_panel, $candidate, $usernameinvoice)
 {
     global $ManagePanel;
@@ -637,6 +638,8 @@ function rxUsernameTaken($name_panel, $candidate, $usernameinvoice)
     }
     return isset($DataUserOut['username']);
 }
+}
+if (!function_exists('rxResolveUsernameCollision')) {
 function rxResolveUsernameCollision($marzban_list_get, $username_ac, $usernameinvoice, $from_id)
 {
     // The sequential counters (numbercount / number_username) only advance
@@ -674,6 +677,7 @@ function rxResolveUsernameCollision($marzban_list_get, $username_ac, $usernamein
         }
     }
     return strtolower($username_ac . "_" . rand(1000000, 9999999));
+}
 }
 function outputlunk($text)
 {
