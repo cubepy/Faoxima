@@ -197,7 +197,20 @@ final class PaymentInitHandler extends BaseHandler
                 $this->handleGateway('zarinpay', $amount, function ($amt, $orderId) {
                     return createPayZarinpey($amt, $orderId, (string)($this->user['id'] ?? ''));
                 }, function ($pay) {
-                    return $pay && !empty($pay['url']) ? $pay['url'] : null;
+                    // [FIX] «ساخت لینک پرداخت ناموفق بود» روی درگاه کیوب‌پی.
+                    // createPayZarinpey() لینک را با کلیدِ payment_link برمی‌گرداند (و در
+                    // حالت‌های دیگرِ CubePay ممکن است pay_page_url/payment_url باشد)، ولی
+                    // این استخراج‌گر دنبالِ کلیدِ 'url' می‌گشت که هیچ‌وقت وجود نداشت — پس
+                    // همیشه null و در نتیجه خطای ساختِ لینک. حالا همان کلیدهای واقعی خوانده
+                    // می‌شوند (aqayepardakht و zarinpal بالاتر خودشان url را می‌سازند و
+                    // مشکلی نداشتند).
+                    if (!is_array($pay) || empty($pay['success'])) {
+                        return null;
+                    }
+                    return $pay['payment_link']
+                        ?? ($pay['pay_page_url']
+                        ?? ($pay['payment_url']
+                        ?? ($pay['url'] ?? null)));
                 });
                 return;
 
