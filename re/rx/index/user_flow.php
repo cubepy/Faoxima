@@ -2745,15 +2745,11 @@ $textonebuy
         $_purge->execute();
         $_purge->close();
 
-        $_stmt = $connect->prepare("SELECT id FROM Payment_report WHERE id_user = ? AND (payment_Status = 'Unpaid' OR payment_Status = 'waiting') AND Payment_Method = 'cart to cart' LIMIT 1");
-        $_stmt->bind_param("s", $from_id_sql);
-        $_stmt->execute();
-        $checkpay = $_stmt->get_result();
-        $_stmt->close();
-        if (mysqli_num_rows($checkpay) != 0) {
-            sendmessage($from_id, $textbotlang['Admin']['SettingPayment']['issetpay'], null, 'HTML');
-            return;
-        }
+        // [REMOVED] گاردِ «یک پرداخت تایید نشده دارید» به‌درخواست صاحب ربات حذف شد.
+        // این چک هر سفارش جدیدِ کارت‌به‌کارت را وقتی یک ردیف Unpaid/waiting قبلی وجود
+        // داشت مسدود می‌کرد؛ چون ردیف‌های waiting (رسید فرستاده، منتظر تایید) هرگز
+        // پاک نمی‌شوند، مشتری برای همیشه قفل می‌شد و نمی‌توانست سفارش تازه بدهد.
+        // پاکسازیِ ردیف‌های Unpaidِ کهنه بالاتر همچنان انجام می‌شود و کافی است.
         $mainbalance = select("PaySetting", "ValuePay", "NamePay", "minbalancecart", "select")['ValuePay'];
         $maxbalance = select("PaySetting", "ValuePay", "NamePay", "maxbalancecart", "select")['ValuePay'];
         if ($user['Processing_value'] < $mainbalance || $user['Processing_value'] > $maxbalance) {

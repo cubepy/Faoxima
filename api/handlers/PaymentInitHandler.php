@@ -43,20 +43,10 @@ final class PaymentInitHandler extends BaseHandler
 
 
         if ($method === 'carttocart' || $method === 'carttocart_pv') {
+            // پاکسازیِ ردیف‌های کهنه حفظ شد (کمک به تمیز ماندن دیتابیس)، ولی گاردِ
+            // «یک درخواست پرداخت در انتظار بررسی دارید» به‌درخواست صاحب ربات حذف شد
+            // تا مشتری بتواند بدونِ گیر کردن روی سفارشِ قبلی، سفارش تازه ثبت کند.
             $this->purgeStaleCarttocart((int)$this->user['id']);
-
-            $pendingFresh = (int) FaoximaDb::fetchScalar(
-                "SELECT COUNT(*) FROM Payment_report
-                  WHERE id_user = :u
-                    AND payment_Status IN ('Unpaid','pending')
-                    AND (Payment_Method = 'cart to cart' OR Payment_Method = 'carttocart_pv')
-                    AND source = 'miniapp'",
-                [':u' => $this->user['id']]
-            );
-            if ($pendingFresh > 0) {
-                FaoximaResponse::fail(409,
-                    '⏳ یک درخواست پرداخت در انتظار بررسی دارید. لطفاً ابتدا آن را تکمیل یا لغو کنید.');
-            }
         }
 
 
