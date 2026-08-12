@@ -2801,6 +2801,16 @@ $textonebuy
             ];
             $price_copy = intval($user['Processing_value'] . "0");
             $textcart = strtr($datatextbot['text_cart'], $replacements);
+            // [FIX] وقتی «تایید خودکار» خاموش است از قالب text_cart استفاده می‌شود؛
+            // اگر ادمین این قالب را پر نکرده باشد، پیام خالی می‌رفت و شماره کارت
+            // اصلاً نمایش داده نمی‌شد. این fallback تضمین می‌کند کارت و مبلغ همیشه
+            // نشان داده شوند (بدون آفستِ تایید خودکار — همان چیزی که مدنظر است).
+            if (trim(strip_tags((string) $textcart)) === '') {
+                $textcart = "💳 برای تکمیل پرداخت، مبلغ <b>{$valueprice}</b> تومان را به کارت زیر واریز کنید:\n\n"
+                    . "شماره کارت:\n<code>{$card_number}</code>\n"
+                    . "به نام: <b>{$PaySettingname}</b>\n\n"
+                    . "سپس دکمه «✅ پرداخت کردم | ارسال رسید» را بزنید و تصویر رسید را ارسال نمایید.";
+            }
         }
         $invoice = "{$user['Processing_value_tow']}|{$user['Processing_value_one']}";
         $dateacc = date('Y/m/d H:i:s');
