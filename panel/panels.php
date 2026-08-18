@@ -884,22 +884,29 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $codePanel = strtolower(preg_replace('/[^a-z0-9]/i', '', $namePanel) . '_' . substr(md5(uniqid('', true)), 0, 6));
 
 
+                // [FIX] ستون on_hold_test در جدول marzban_panel به‌صورت
+                // «NOT NULL» و بدون DEFAULT تعریف شده است. این INSERT وب آن را
+                // در ستون‌ها نمی‌آورد، برای همین MySQL با خطای
+                // «Field 'on_hold_test' doesn't have a default value» افزودن
+                // پنل را رد می‌کرد. مقدار «1» همان پیش‌فرضی است که ربات تلگرام
+                // هنگام افزودن پنل ست می‌کند، پس رفتار یکسان می‌ماند.
                 $stmt = $pdo->prepare(
                     "INSERT INTO marzban_panel
-                     (code_panel, name_panel, status, url_panel, username_panel, password_panel, api_key, xui_api_token, type, agent)
-                     VALUES (:c, :n, :st, :u, :user, :pass, :api, :xt, :type, :agent)"
+                     (code_panel, name_panel, status, url_panel, username_panel, password_panel, api_key, xui_api_token, type, agent, on_hold_test)
+                     VALUES (:c, :n, :st, :u, :user, :pass, :api, :xt, :type, :agent, :onhold)"
                 );
                 $stmt->execute([
-                    ':c'    => $codePanel,
-                    ':n'    => $namePanel,
-                    ':st'   => $initialStatus,
-                    ':u'    => $urlPanel,
-                    ':user' => $userPanel,
-                    ':pass' => $passPanel,
-                    ':api'  => $apiKey,
-                    ':xt'   => $xuiToken,
-                    ':type' => $type,
-                    ':agent'=> $agent,
+                    ':c'      => $codePanel,
+                    ':n'      => $namePanel,
+                    ':st'     => $initialStatus,
+                    ':u'      => $urlPanel,
+                    ':user'   => $userPanel,
+                    ':pass'   => $passPanel,
+                    ':api'    => $apiKey,
+                    ':xt'     => $xuiToken,
+                    ':type'   => $type,
+                    ':agent'  => $agent,
+                    ':onhold' => '1',
                 ]);
                 $statusLabel = $initialStatus === 'active' ? '«فعال»' : '«غیرفعال»';
                 $flash['ok'] = 'پنل جدید با وضعیت ' . $statusLabel . ' ثبت شد.' . $testNote;
