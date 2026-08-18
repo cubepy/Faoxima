@@ -779,6 +779,22 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
             $type = 'marzban';
         }
 
+        // [FIX] «پاسارگارد» یک نوع پنلِ جدا نیست؛ در واقع یک پنل Marzban با
+        // version_panel='1' است. ربات تلگرام هنگام افزودن، type را از
+        // 'pasargard' به 'marzban' و version_panel را '1' تبدیل می‌کند
+        // (bootstrap_2.php). پنل وب این تبدیل را انجام نمی‌داد و type='pasargard'
+        // خام ذخیره می‌شد؛ چون هیچ‌جای منطقِ خرید/منو این نوع را نمی‌شناسد،
+        // خرید با «Panel Not Found» شکست می‌خورد و ذخیره‌ی تنظیمات بی‌پاسخ
+        // می‌ماند. تبدیل باید قبل از تستِ اتصال انجام شود تا پنل مثل Marzban
+        // تست شود، و version_panel='1' هم لازم است چون createUser برای پاسارگارد
+        // payloadِ API متفاوتی می‌فرستد (Marzban.php).
+        $panelVersionFlag = '0';
+        $isPasargad = ($type === 'pasargard');
+        if ($isPasargad) {
+            $type = 'marzban';
+            $panelVersionFlag = '1';
+        }
+
 
         if (!in_array($agent, ['all', 'f', 'n', 'n2'], true)) {
             $agent = 'all';
@@ -892,8 +908,8 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 // هنگام افزودن پنل ست می‌کند، پس رفتار یکسان می‌ماند.
                 $stmt = $pdo->prepare(
                     "INSERT INTO marzban_panel
-                     (code_panel, name_panel, status, url_panel, username_panel, password_panel, api_key, xui_api_token, type, agent, on_hold_test)
-                     VALUES (:c, :n, :st, :u, :user, :pass, :api, :xt, :type, :agent, :onhold)"
+                     (code_panel, name_panel, status, url_panel, username_panel, password_panel, api_key, xui_api_token, type, agent, on_hold_test, version_panel)
+                     VALUES (:c, :n, :st, :u, :user, :pass, :api, :xt, :type, :agent, :onhold, :ver)"
                 );
                 $stmt->execute([
                     ':c'      => $codePanel,
@@ -907,7 +923,49 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ':type'   => $type,
                     ':agent'  => $agent,
                     ':onhold' => '1',
+                    ':ver'    => $panelVersionFlag,
                 ]);
+
+                // [FIX] برای پنل پاسارگارد، بقیه‌ی مقادیرِ پیش‌فرضِ فروشِ Marzban
+                // را دقیقاً مثل ربات پر می‌کنیم تا پنلِ اضافه‌شده از وب همان‌طور
+                // بفروشد که پنلِ اضافه‌شده از داخل ربات می‌فروشد (لینک ساب فعال،
+                // روش نام‌کاربری، قیمت‌های پیش‌فرض و ...). این UPDATE fail-open است:
+                // اگر خطا بدهد، پنل با type='marzban' و version_panel='1' ثبت شده و
+                // خرید کار می‌کند؛ فقط ممکن است بعضی پیش‌فرض‌ها خالی بمانند.
+                if ($isPasargad) {
+                    try {
+                        $p4000 = json_encode(['f' => '4000', 'n' => '4000', 'n2' => '4000']);
+                        $pmain = json_encode(['f' => '1', 'n' => '1', 'n2' => '1']);
+                        $pmax  = json_encode(['f' => '1000', 'n' => '1000', 'n2' => '1000']);
+                        $pzero = json_encode(['f' => '0', 'n' => '0', 'n2' => '0']);
+                        $pdo->prepare(
+                            "UPDATE marzban_panel SET
+                                sublink = 'onsublink', config = 'offconfig',
+                                MethodUsername = 'آیدی عددی + حروف و عدد رندوم',
+                                Methodextend = 'ریست حجم و زمان', namecustom = 'none',
+                                conecton = 'offconecton', inboundid = '1', inbound_deactive = '1',
+                                inboundstatus = 'offinbounddisable', status_extend = 'on_extend',
+                                subvip = 'offsubvip', changeloc = 'offchangeloc',
+                                TestAccount = 'ONTestAccount', time_usertest = '1', val_usertest = '100',
+                                linksubx = :url,
+                                priceextravolume = :p4000, priceextratime = :p4000,
+                                pricecustomvolume = :p4000, pricecustomtime = :p4000,
+                                mainvolume = :pmain, maxvolume = :pmax, maintime = :pmain, maxtime = :pmax,
+                                customvolume = :pzero
+                             WHERE code_panel = :code"
+                        )->execute([
+                            ':url'   => $urlPanel,
+                            ':p4000' => $p4000,
+                            ':pmain' => $pmain,
+                            ':pmax'  => $pmax,
+                            ':pzero' => $pzero,
+                            ':code'  => $codePanel,
+                        ]);
+                    } catch (\Throwable $e) {
+                        error_log('[panel/panels] pasargad defaults enrich failed: ' . $e->getMessage());
+                    }
+                }
+
                 $statusLabel = $initialStatus === 'active' ? '«فعال»' : '«غیرفعال»';
                 $flash['ok'] = 'پنل جدید با وضعیت ' . $statusLabel . ' ثبت شد.' . $testNote;
                 faoxima_panel_authlog('ADD_DONE', [
