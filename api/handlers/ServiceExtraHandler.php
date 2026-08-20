@@ -85,7 +85,12 @@ final class ServiceExtraHandler extends BaseHandler
                 FaoximaResponse::fail(422, (string)($dv['reason'] ?? '❌ کد تخفیف نامعتبر است.'));
             }
             $price = MiniDiscount::applyToPrice($dv['row'], $price);
-            MiniDiscount::markSellUsed($discountCode, $this->user);
+            // [FIX 5] اگر ظرفیت کد همین لحظه توسط کاربر دیگری تمام شده باشد، باید
+            // خرید متوقف شود؛ در غیر این صورت تخفیف اعمال می‌شود و یک کدِ محدود
+            // به‌دفعات مصرف می‌گردد.
+            if (!MiniDiscount::markSellUsed($discountCode, $this->user)) {
+                FaoximaResponse::fail(409, '❌ ظرفیت استفاده از این کد تخفیف همین لحظه پر شد.');
+            }
         }
 
 
@@ -122,8 +127,14 @@ final class ServiceExtraHandler extends BaseHandler
 
 
             $extendStateTow = $kind === 'time' ? 'getextratimeuser' : 'getextravolumeuser';
+            // [FIX 3] مبلغِ سمت‌سرورِ درگاه دقیقاً از ستون Processing_value خوانده می‌شود،
+            // ولی این مسیر فقط Processing_value_one و _tow را می‌نوشت؛ یعنی خرید حجم/زمان
+            // اضافه هیچ کنترلی روی مبلغ نداشت و مشتری می‌توانست برای کسریِ ۵۰۰٬۰۰۰ تومان
+            // فقط ۱٬۰۰۰ تومان پرداخت کند (یا مبلغِ جامانده از خریدِ قبلی خوانده شود).
+            update('user', 'Processing_value',     $amountDue,                             'id', $this->user['id']);
             update('user', 'Processing_value_one', $invoice['username'] . '%' . $amount, 'id', $this->user['id']);
             update('user', 'Processing_value_tow', $extendStateTow,                       'id', $this->user['id']);
+            $this->user['Processing_value'] = $amountDue;
 
             FaoximaResponse::ok([
                 'kind'        => 'requires_payment',
@@ -161,18 +172,44 @@ final class ServiceExtraHandler extends BaseHandler
 
 
         $managePanel = new ManagePanel();
-        if ($kind === 'time') {
-            $result = $managePanel->extra_time(
-                (string)$invoice['username'],
-                (string)$panel['code_panel'],
-                (int)$amount
+
+        // [FIX 6] موجودی کاربر همین حالا کسر شده است. این فراخوانی یک درخواست HTTP
+        // به سرور شخص دیگری است و اگر داخلش Exception پرتاب شود، اجرا تا catch
+        // سراسری miniapp.php بالا می‌رود، پاسخ ۵۰۰ برمی‌گردد و هیچ مبلغی هم عودت
+        // داده نمی‌شود؛ یعنی کاربر پول داده و حجم/زمانی نگرفته. شاخه‌ی پایین این
+        // برگشت را فقط برای پنلی انجام می‌دهد که «نه» می‌گوید، نه پنلی که کرش می‌کند.
+        try {
+            if ($kind === 'time') {
+                $result = $managePanel->extra_time(
+                    (string)$invoice['username'],
+                    (string)$panel['code_panel'],
+                    (int)$amount
+                );
+            } else {
+                $result = $managePanel->extra_volume(
+                    (string)$invoice['username'],
+                    (string)$panel['code_panel'],
+                    (int)$amount
+                );
+            }
+        } catch (Throwable $e) {
+            FaoximaLogger::exception($e, 'ManagePanel extra_* threw', [
+                'kind'     => $kind,
+                'user_id'  => $this->user['id'],
+                'username' => $invoice['username'] ?? null,
+            ]);
+            if ($balanceCharged) {
+                balance_atomic_credit($this->user['id'], $finalPrice);
+            }
+            $this->reportError(
+                ($kind === 'time' ? 'خطای خرید زمان اضافه (Exception)' : 'خطای خرید حجم اضافه (Exception)') .
+                "\nنام پنل : {$panel['name_panel']}\n" .
+                "نام کاربری سرویس : {$invoice['username']}\n" .
+                "دلیل خطا : {$e->getMessage()}"
             );
-        } else {
-            $result = $managePanel->extra_volume(
-                (string)$invoice['username'],
-                (string)$panel['code_panel'],
-                (int)$amount
-            );
+            FaoximaResponse::fail(502, $kind === 'time'
+                ? '❌ خطایی در خرید زمان اضافه رخ داده با پشتیبانی در ارتباط باشید'
+                : '❌ خطایی در خرید حجم اضافه رخ داده با پشتیبانی در ارتباط باشید');
         }
 
         if (!is_array($result) || ($result['status'] ?? null) === false) {
@@ -367,6 +404,10 @@ final class ServiceExtraHandler extends BaseHandler
 
     private function reportError(string $text): void
     {
+        // [FIX 10] اگر متن خطای پنل شامل < باشد (مثلاً صفحه‌ی HTML خطا)، تلگرام پیام
+        // را در حالت parse_mode=HTML اصلاً ارسال نمی‌کند؛ یعنی درست در لحظه‌ای که
+        // هشدار مهم است، هیچ اطلاعی به ادمین نمی‌رسد.
+        $text = htmlspecialchars($text, ENT_QUOTES, 'UTF-8');
         $channel = (string)($this->setting['Channel_Report'] ?? '');
         if ($channel === '') return;
         $errorRow = select('topicid', 'idreport', 'report', 'errorreport', 'select');

@@ -218,33 +218,96 @@ final class MiniDiscount
         ];
     }
 
-    public static function markSellUsed(string $code, array $user): void
+    /**
+     * [FIX 5] یک بار مصرفِ کد تخفیف را برمی‌دارد؛ اگر آخرین ظرفیت در همان لحظه
+     * نصیب کاربر دیگری شده باشد false برمی‌گرداند.
+     *
+     * قبلاً این متد «بخوان، یکی اضافه کن، بنویس» بود و هیچ سقفی در WHERE نداشت و
+     * چیزی هم برنمی‌گرداند؛ یعنی دو مشتری که هم‌زمان آخرین ظرفیتِ یک کد را می‌گرفتند
+     * هر دو از بررسیِ validateSell رد می‌شدند و هر دو تخفیف را می‌گرفتند — کدِ
+     * محدود به یک استفاده، بارها مصرف می‌شد.
+     */
+    public static function markSellUsed(string $code, array $user): bool
     {
         $code = trim($code);
-        if ($code === '') return;
+        if ($code === '') return false;
         try {
             $pdo = FaoximaDb::pdo();
-            $row = FaoximaDb::fetchOne('SELECT usedDiscount FROM DiscountSell WHERE codeDiscount = :c LIMIT 1', [':c' => $code]);
-            $used = $row !== null ? ((int)($row['usedDiscount'] ?? 0) + 1) : 1;
-            $pdo->prepare('UPDATE DiscountSell SET usedDiscount = :v WHERE codeDiscount = :c')
-                ->execute([':v' => (string)$used, ':c' => $code]);
+            $stmt = $pdo->prepare(
+                "UPDATE DiscountSell
+                    SET usedDiscount = CAST(COALESCE(NULLIF(usedDiscount, ''), '0') AS SIGNED) + 1
+                  WHERE codeDiscount = :c
+                    AND (limitDiscount IS NULL
+                         OR limitDiscount = ''
+                         OR CAST(limitDiscount AS SIGNED) <= 0
+                         OR CAST(COALESCE(NULLIF(usedDiscount, ''), '0') AS SIGNED) < CAST(limitDiscount AS SIGNED))"
+            );
+            $stmt->execute([':c' => $code]);
+            if ($stmt->rowCount() < 1) {
+                return false;
+            }
         } catch (Throwable $e) {
+            return false;
         }
-        self::recordConsumed($code, (string)$user['id'], 'sell');
+
+        // [FIX 5] سقفِ «هر کاربر چند بار» هم فقط خوانده می‌شد و هیچ‌وقت با نوشتن گره
+        // نمی‌خورد؛ پس یک کدِ یک‌بار-برای-هر-کاربر با دو بار زدنِ دکمه‌ی تأیید دو بار
+        // مصرف می‌شد. مثل کدهای هدیه: اول ردیف مصرف را ثبت می‌کنیم، بعد ردیف‌های
+        // آزادنشده تا همان id را می‌شماریم؛ در تلاش‌های هم‌زمان دقیقاً useuser تای اول
+        // خودشان را داخل سقف می‌بینند.
+        $userId = (string)$user['id'];
+        $mine = self::recordConsumed($code, $userId, 'sell');
+        $useUser = 0;
+        try {
+            $useUser = (int) FaoximaDb::fetchScalar(
+                'SELECT useuser FROM DiscountSell WHERE codeDiscount = :c LIMIT 1',
+                [':c' => $code]
+            );
+        } catch (Throwable $e) {
+            $useUser = 0;
+        }
+        if ($useUser > 0 && $mine > 0) {
+            try {
+                $pdo = FaoximaDb::pdo();
+                $rank = $pdo->prepare(
+                    'SELECT COUNT(*) FROM Giftcodeconsumed
+                      WHERE id_user = :u AND code = :c AND id <= :id
+                        AND (released IS NULL OR released = 0)'
+                );
+                $rank->execute([':u' => $userId, ':c' => $code, ':id' => $mine]);
+                if ((int) $rank->fetchColumn() > $useUser) {
+                    $pdo->prepare('DELETE FROM Giftcodeconsumed WHERE id = :id')->execute([':id' => $mine]);
+                    $pdo->prepare(
+                        "UPDATE DiscountSell
+                            SET usedDiscount = GREATEST(CAST(COALESCE(NULLIF(usedDiscount, ''), '0') AS SIGNED) - 1, 0)
+                          WHERE codeDiscount = :c"
+                    )->execute([':c' => $code]);
+                    return false;
+                }
+            } catch (Throwable $e) {
+                // سقف کل از قبل رعایت شده؛ ردکردنِ یک مشتریِ واقعی به‌خاطر خطای یک
+                // کوئریِ شمارش، بدترِ این دو حالت است.
+            }
+        }
+        return true;
     }
 
-    private static function recordConsumed(string $code, string $userId, string $kind): void
+    /** [FIX 5] ردیف مصرف را ثبت می‌کند و id آن را برمی‌گرداند (یا ۰). */
+    private static function recordConsumed(string $code, string $userId, string $kind): int
     {
         try {
             $pdo = FaoximaDb::pdo();
             $pdo->prepare('INSERT INTO Giftcodeconsumed (id_user, code, kind, consumed_at) VALUES (:u, :c, :k, :t)')
                 ->execute([':u' => $userId, ':c' => $code, ':k' => $kind, ':t' => (string)time()]);
+            return (int) $pdo->lastInsertId();
         } catch (Throwable $e) {
             try {
                 $pdo = FaoximaDb::pdo();
                 $pdo->prepare('INSERT INTO Giftcodeconsumed (id_user, code) VALUES (:u, :c)')
                     ->execute([':u' => $userId, ':c' => $code]);
+                return (int) $pdo->lastInsertId();
             } catch (Throwable $e2) {
+                return 0;
             }
         }
     }
@@ -287,13 +350,14 @@ final class MiniDiscount
             $marked->execute([':id' => $rowId]);
             if ($marked->rowCount() < 1) return false;
 
-            $dsRow = FaoximaDb::fetchOne('SELECT usedDiscount FROM DiscountSell WHERE codeDiscount = :c LIMIT 1', [':c' => $code]);
-            if (is_array($dsRow)) {
-                $used = (int)($dsRow['usedDiscount'] ?? 0) - 1;
-                if ($used < 0) $used = 0;
-                $pdo->prepare('UPDATE DiscountSell SET usedDiscount = :v WHERE codeDiscount = :c')
-                    ->execute([':v' => (string)$used, ':c' => $code]);
-            }
+            // [FIX 5] کم‌کردن باید داخل خودِ دیتابیس انجام شود، به همان دلیلی که
+            // زیادکردن؛ «بخوان و مقدارِ منهای یک را بنویس» هر مصرفی را که وسطِ کار
+            // ثبت شود از بین می‌برد و ظرفیتِ کد دوباره آزاد می‌شود.
+            $pdo->prepare(
+                "UPDATE DiscountSell
+                    SET usedDiscount = GREATEST(CAST(COALESCE(NULLIF(usedDiscount, ''), '0') AS SIGNED) - 1, 0)
+                  WHERE codeDiscount = :c"
+            )->execute([':c' => $code]);
             return true;
         } catch (Throwable $e) {
             return false;

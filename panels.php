@@ -51,8 +51,19 @@ class ManagePanel
             $Output['msg'] = 'Panel Not Found';
             return $Output;
         }
+        // Scoped to this panel, not to the username alone.
+        //
+        // $inoice['id_invoice'] becomes the customer's /sub/<id> URL below, and
+        // that id is the only thing protecting their configs. Service
+        // usernames are unique *within* a panel — the panel itself enforces
+        // that — but not across a shop, and with «نام کاربری دلخواه» the
+        // customer picks the name. So an unscoped lookup could hand one
+        // customer another customer's subscription secret, which is full
+        // access to their configs, not merely the wrong screen.
         if ($Get_Data_Panel['subvip'] == "onsubvip") {
-            $inoice = select("invoice", "*", "username", $usernameC, "select");
+            $inoice = function_exists('rx_invoice_on_panel')
+                ? rx_invoice_on_panel((string) $usernameC, (string) $Get_Data_Panel['name_panel'])
+                : false;   // no link beats the wrong customer's link
         } else {
             $inoice = false;
         }
@@ -540,8 +551,19 @@ class ManagePanel
                 'msg' => 'Panel Not Found'
             );
         }
+        // Scoped to this panel, not to the username alone.
+        //
+        // $inoice['id_invoice'] becomes the customer's /sub/<id> URL below, and
+        // that id is the only thing protecting their configs. Service
+        // usernames are unique *within* a panel — the panel itself enforces
+        // that — but not across a shop, and with «نام کاربری دلخواه» the
+        // customer picks the name. So an unscoped lookup could hand one
+        // customer another customer's subscription secret, which is full
+        // access to their configs, not merely the wrong screen.
         if (isset($Get_Data_Panel['subvip']) && $Get_Data_Panel['subvip'] == "onsubvip") {
-            $inoice = select("invoice", "*", "username", $username, "select");
+            $inoice = function_exists('rx_invoice_on_panel')
+                ? rx_invoice_on_panel((string) $username, (string) $Get_Data_Panel['name_panel'])
+                : false;   // no link beats the wrong customer's link
         } else {
             $inoice = false;
         }
@@ -947,7 +969,9 @@ class ManagePanel
             $stmt->bindParam(':username', $username);
             $stmt->execute();
             $configman = $stmt->fetch(PDO::FETCH_ASSOC);
-            $service = select("invoice", "*", "username", $username, "select");
+            $service = (function_exists('rx_invoice_on_panel')
+                ? rx_invoice_on_panel((string) $username, (string) $Get_Data_Panel['name_panel'])
+                : false);
             $Output = array(
                 'status' => $service['Status'],
                 'username' => $service['username'],
@@ -1016,7 +1040,9 @@ class ManagePanel
                     'msg' => isset($UsernameData['msg']) ? $UsernameData['msg'] : ''
                 );
             }
-            $invoiceinfo = select("invoice", "*", "username", $username, "select");
+            $invoiceinfo = (function_exists('rx_invoice_on_panel')
+                ? rx_invoice_on_panel((string) $username, (string) $Get_Data_Panel['name_panel'])
+                : false);
             $infoconfig = isset($invoiceinfo['user_info']) ? json_decode($invoiceinfo['user_info'], true) : json_encode(array());
             if (!isset($UsernameData['id'])) {
                 $Output = array(
@@ -1162,7 +1188,9 @@ class ManagePanel
                     'msg' => $UsernameData['msg']
                 );
             } else {
-                $invocie = select("invoice", "*", "username", $username, "select");
+                $invocie = (function_exists('rx_invoice_on_panel')
+                ? rx_invoice_on_panel((string) $username, (string) $Get_Data_Panel['name_panel'])
+                : false);
                 $traffic_get = GetUsermikrotik_volume($Get_Data_Panel['name_panel'], $UsernameData['.id']);
                 $used_traffic = $traffic_get['total-upload'] + $traffic_get['total-download'];
                 $data_limit = $invocie['Volume'] * pow(1024, 3);
@@ -2148,7 +2176,9 @@ class ManagePanel
     {
         $panel = $this->loadPanel($name_panel, "code_panel");
         $product = select("product", "*", "code_product", $code_product, "select");
-        $invoice = select("invoice", "*", "username", $username, "select");
+        $invoice = (function_exists('rx_invoice_on_panel')
+                ? rx_invoice_on_panel((string) $username, (string) (is_array($panel) ? ($panel['name_panel'] ?? '') : ''))
+                : false);
         if ($code_product == "custom_volume")
             $product = true;
         if ($panel == false || $product == false) {
@@ -2398,7 +2428,9 @@ class ManagePanel
     function extra_volume($username_account, $code_panel, $limit_volume_new)
     {
         $panel = $this->loadPanel($code_panel, "code_panel");
-        $invoice = select("invoice", "*", "username", $username_account, "select");
+        $invoice = (function_exists('rx_invoice_on_panel')
+                ? rx_invoice_on_panel((string) $username_account, (string) (is_array($panel) ? ($panel['name_panel'] ?? '') : ''))
+                : false);
         if ($panel == false) {
             return array(
                 'status' => false,
@@ -2554,7 +2586,9 @@ class ManagePanel
     function extra_time($username_account, $code_panel, $limit_time_new)
     {
         $panel = $this->loadPanel($code_panel, "code_panel");
-        $invoice = select("invoice", "*", "username", $username_account, "select");
+        $invoice = (function_exists('rx_invoice_on_panel')
+                ? rx_invoice_on_panel((string) $username_account, (string) (is_array($panel) ? ($panel['name_panel'] ?? '') : ''))
+                : false);
         if ($panel == false) {
             return array(
                 'status' => false,

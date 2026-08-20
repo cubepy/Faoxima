@@ -52,13 +52,26 @@ function validateToken($headers)
     if (!isset($headers['Token'])) {
         return false;
     }
+    // [FIX نشتِ اطلاعات] این تنها فایلِ api/ بود که سخت‌سازیِ توکن را نگرفته بود —
+    // و دقیقاً همانی است که از Payment_report محافظت می‌کند (آیدی تلگرام، مبلغ و
+    // روشِ پرداختِ همه‌ی مشتریان، تا هزار ردیف در هر صفحه).
+    // مشکل: وقتی hash.txt وجود ندارد $token برابر '' می‌شود و در مقایسه‌ی
+    // in_array(..., true) رابطه‌ی '' === '' درست است — یعنی هر درخواستی که هدرِ
+    // «Token:» را خالی بفرستد از گارد رد می‌شد. حالا هدرِ خالی مستقیماً رد می‌شود،
+    // کاندیداهای خالی حذف می‌شوند و مقایسه با hash_equals انجام می‌گیرد
+    // (همان شکلی که بقیه‌ی هشت فایلِ api/ از قبل دارند).
+    $headerToken = (string) $headers['Token'];
+    if ($headerToken === '') return false;
     if (is_file('hash.txt')) {
-        $token = file_get_contents('hash.txt');
+        $token = trim((string) file_get_contents('hash.txt'));
     } else {
         $token = "";
     }
-    $validTokens = [$token, $APIKEY];
-    return in_array($headers['Token'], $validTokens, true);
+    $validTokens = array_values(array_filter([$token, (string) ($APIKEY ?? '')], 'strlen'));
+    foreach ($validTokens as $candidate) {
+        if (hash_equals($candidate, $headerToken)) return true;
+    }
+    return false;
 }
 
 $headers = getallheaders();

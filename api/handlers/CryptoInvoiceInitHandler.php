@@ -46,13 +46,29 @@ final class CryptoInvoiceInitHandler extends BaseHandler
 
         $invoiceMeta = '';
         if ($purchaseUser !== null && $purchaseUser !== '') {
-            $unpaidExists = (int) FaoximaDb::fetchScalar(
-                "SELECT COUNT(*) FROM invoice
-                  WHERE username = :u AND id_user = :uid AND Status = 'unpaid'",
+            $pendingInvoice = FaoximaDb::fetchOne(
+                "SELECT price_product FROM invoice
+                  WHERE username = :u AND id_user = :uid AND Status = 'unpaid'
+                  ORDER BY id_invoice DESC LIMIT 1",
                 [':u' => $purchaseUser, ':uid' => $this->user['id']]
             );
-            if ($unpaidExists === 0) {
+            if ($pendingInvoice === null) {
                 FaoximaResponse::fail(404, '❌ فاکتور خرید ناتمامی برای این نام کاربری پیدا نشد.');
+            }
+
+            // [FIX 1] مبلغ ارز دیجیتال مستقیم از سمت کاربر می‌آمد و فقط وجود فاکتور
+            // پرداخت‌نشده چک می‌شد؛ یعنی مشتری می‌توانست برای یک سرویس ۵۰۰٬۰۰۰ تومانی
+            // فاکتور ۱٬۰۰۰ تومانی بسازد و سرویس را کامل تحویل بگیرد (چون سهم منفی کیف‌پول
+            // در تسویه صفر می‌شود). بنابراین مبلغ قابل پرداخت را سمت سرور دوباره حساب می‌کنیم.
+            $owed = (float) ($pendingInvoice['price_product'] ?? 0) - (float) ($this->user['Balance'] ?? 0);
+            if ($owed < 0) {
+                $owed = 0;
+            }
+            $owed = (int) ceil($owed);
+            if ($owed > 0 && $owed !== $amount) {
+                $amount = $owed;
+                update('user', 'Processing_value', $amount, 'id', $this->user['id']);
+                $this->user['Processing_value'] = $amount;
             }
             update('user', 'Processing_value_one', $purchaseUser, 'id', $this->user['id']);
             update('user', 'Processing_value_tow', 'getconfigafterpay', 'id', $this->user['id']);

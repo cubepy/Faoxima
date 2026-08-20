@@ -40,8 +40,12 @@ final class PaymentStatusHandler extends BaseHandler
             FaoximaResponse::badRequest('order_id is required');
         }
 
+        // [FIX 8] قید source = 'miniapp' برداشته شد. مالکیت فاکتور با id_user تضمین
+        // شده است و این قید فقط باعث می‌شد پرداختی که از داخل ربات باز شده «پیدا
+        // نشود» و به مشتری «پرداخت ناموفق بود» نشان داده شود — آن هم بعد از اینکه
+        // پول واقعاً واریز شده است.
         $report = FaoximaDb::fetchOne(
-            'SELECT * FROM Payment_report WHERE id_order = :o AND id_user = :u AND source = \'miniapp\' LIMIT 1',
+            'SELECT * FROM Payment_report WHERE id_order = :o AND id_user = :u LIMIT 1',
             [
                 ':o' => $orderId,
                 ':u' => (string)$this->user['id'],

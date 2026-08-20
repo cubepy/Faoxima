@@ -43,9 +43,7 @@ final class PaymentInitHandler extends BaseHandler
 
 
         if ($method === 'carttocart' || $method === 'carttocart_pv') {
-            // پاکسازیِ ردیف‌های کهنه حفظ شد (کمک به تمیز ماندن دیتابیس)، ولی گاردِ
-            // «یک درخواست پرداخت در انتظار بررسی دارید» به‌درخواست صاحب ربات حذف شد
-            // تا مشتری بتواند بدونِ گیر کردن روی سفارشِ قبلی، سفارش تازه ثبت کند.
+            // گاردِ «یک درخواست پرداخت در انتظار بررسی دارید» به‌درخواست صاحب ربات حذف شد.
             $this->purgeStaleCarttocart((int)$this->user['id']);
         }
 
@@ -125,7 +123,12 @@ final class PaymentInitHandler extends BaseHandler
                 $amount = $gatewayAmount;
                 update('user', 'Processing_value', $amount, 'id', $this->user['id']);
                 $this->user['Processing_value'] = $amount;
-                MiniDiscount::markSellUsed($chargeCode, $this->user);
+                // [FIX 5] برداشتنِ ظرفیت کد ممکن است شکست بخورد (آخرین ظرفیت همین
+                // لحظه به کاربر دیگری رسیده باشد)؛ بدون این بررسی، کاربر مبلغ کمترِ
+                // تخفیف‌خورده را در درگاه پرداخت می‌کند ولی کد اصلاً برایش ثبت نشده.
+                if (!MiniDiscount::markSellUsed($chargeCode, $this->user)) {
+                    FaoximaResponse::fail(409, '❌ ظرفیت استفاده از این کد تخفیف همین لحظه پر شد.');
+                }
             }
             update('user', 'Processing_value_one', '', 'id', $this->user['id']);
             update('user', 'Processing_value_tow', '', 'id', $this->user['id']);
@@ -191,9 +194,7 @@ final class PaymentInitHandler extends BaseHandler
                     // createPayZarinpey() لینک را با کلیدِ payment_link برمی‌گرداند (و در
                     // حالت‌های دیگرِ CubePay ممکن است pay_page_url/payment_url باشد)، ولی
                     // این استخراج‌گر دنبالِ کلیدِ 'url' می‌گشت که هیچ‌وقت وجود نداشت — پس
-                    // همیشه null و در نتیجه خطای ساختِ لینک. حالا همان کلیدهای واقعی خوانده
-                    // می‌شوند (aqayepardakht و zarinpal بالاتر خودشان url را می‌سازند و
-                    // مشکلی نداشتند).
+                    // همیشه null و در نتیجه خطای ساختِ لینک.
                     if (!is_array($pay) || empty($pay['success'])) {
                         return null;
                     }
@@ -388,9 +389,30 @@ final class PaymentInitHandler extends BaseHandler
         $shownAmount = $amount;
         $rialAmount  = $amount * 10;
         if ($autoConfirm) {
-            error_log("Amount before random: " . $amount);
-            error_log("Shown amount: " . $shownAmount);
-            $shownAmount = $amount + random_int(1, 10);
+            // [FIX 7] تأییدِ خودکارِ کارت‌به‌کارت، واریزِ بانکی را «بر اساس مبلغ» به فاکتور
+            // وصل می‌کند؛ ولی مبلغِ نمایشی فقط از ۱۰ حالت (۱ تا ۱۰) انتخاب می‌شد و هیچ
+            // بررسی‌ای هم برای تکراری‌نبودن نداشت. یعنی دو مشتری که مبلغ یکسانی شارژ
+            // می‌کردند به یک عدد می‌رسیدند و واریزِ یکی به حساب دیگری می‌نشست. حالا از
+            // بازه‌ی بزرگ‌تری انتخاب می‌شود و تا ۸ بار تکرار می‌شود تا عددی پیدا شود که
+            // هیچ فاکتورِ در انتظارِ دیگری روی آن نباشد.
+            $shownAmount = $amount + random_int(1, 2000);
+            for ($try = 0; $try < 8; $try++) {
+                $taken = 0;
+                try {
+                    $taken = (int) FaoximaDb::fetchScalar(
+                        "SELECT COUNT(*) FROM Payment_report
+                          WHERE price = :p
+                            AND payment_Status IN ('Unpaid', 'waiting', 'pending')",
+                        [':p' => (string)$shownAmount]
+                    );
+                } catch (Throwable $e) {
+                    $taken = 0;
+                }
+                if ($taken === 0) {
+                    break;
+                }
+                $shownAmount = $amount + random_int(1, 2000);
+            }
             $rialAmount  = $shownAmount * 10;
             update('user', 'Processing_value', $shownAmount, 'id', $this->user['id']);
         }

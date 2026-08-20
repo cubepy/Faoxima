@@ -197,6 +197,37 @@ abstract class BaseHandler
     }
 
 
+    /**
+     * [FIX 2] آیا سرویس دلخواه روی این پنل و برای این سطح کاربر اصلاً فعال است؟
+     * ربات قبل از هر صفحه‌ی سرویس دلخواه همین شرط را چک می‌کند، ولی مینی‌اپ
+     * مستقیم می‌رفت سراغ قیمت‌گذاری. روی پنلی که فروشنده حجم دلخواه را روشن
+     * نکرده، نرخ هر گیگ و هر روز تنظیم نشده و قیمت صفر درمی‌آید.
+     */
+    protected function customServiceIsOnSale(array $panel, string $agent): bool
+    {
+        if (($panel['type'] ?? '') === 'Manualsale') {
+            return false;
+        }
+        $flags = $this->decodeJsonField($panel['customvolume'] ?? null);
+        return (string) ($flags[$agent] ?? '0') === '1';
+    }
+
+    /**
+     * [FIX 2] جلوگیری از فروش سرویس دلخواهی که قیمتش صفر می‌شود.
+     * حجم صفر روی مرزبان/پاسگارد یعنی نامحدود و مدت صفر یعنی بدون انقضا؛ وقتی
+     * حداقل‌های پنل صفر بماند، min=max=0 از اعتبارسنجی رد می‌شود و قیمت صفر
+     * محاسبه می‌شود — یعنی اکانت رایگانِ نامحدودِ بی‌انقضا، آن هم بارها و بارها.
+     */
+    protected function assertCustomServiceIsSellable(int $volume, int $time, float $price): void
+    {
+        if ($volume < 1 || $time < 1) {
+            FaoximaResponse::badRequest('❌ حجم و مدت سرویس دلخواه باید بیشتر از صفر باشد.');
+        }
+        if ($price <= 0) {
+            FaoximaResponse::fail(409, '⛔️ تعرفه سرویس دلخواه روی این سرور تنظیم نشده است.');
+        }
+    }
+
     protected function resolveCountryId(): string
     {
         $value = FaoximaInput::string($this->data, 'country_id');

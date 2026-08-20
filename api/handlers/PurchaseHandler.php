@@ -39,7 +39,16 @@ final class PurchaseHandler extends BaseHandler
             if ($serviceId === '') {
                 FaoximaResponse::badRequest('service_id is required');
             }
-            $product = select('product', '*', 'code_product', $serviceId, 'select');
+            // [FIX 4] محصول فقط با code_product خوانده می‌شد و هیچ‌وقت با پنل انتخابی
+            // تطبیق داده نمی‌شد؛ یعنی مشتری می‌توانست کدِ ارزان‌ترین پلنِ فروشگاه را
+            // روی گران‌ترین سرور بخرد. حالا محصول باید به همان پنل (یا /all) تعلق داشته باشد.
+            $product = FaoximaDb::fetchOne(
+                "SELECT * FROM product
+                  WHERE code_product = :code
+                    AND (Location = :loc OR Location = '/all')
+                  LIMIT 1",
+                [':code' => $serviceId, ':loc' => $panel['name_panel']]
+            );
         } else {
             $product = $this->buildCustomProduct($panel, $customService);
         }
@@ -276,12 +285,36 @@ final class PurchaseHandler extends BaseHandler
             'type'       => 'buy',
         ];
 
-        $remote = $managePanel->createUser(
-            $panel['name_panel'],
-            $product['code_product'],
-            $usernameAc,
-            $createPayload
-        );
+        // [FIX 6] در این نقطه موجودی کاربر کسر شده و ردیف فاکتور هم ساخته شده است.
+        // createUser یک درخواست HTTP به پنلی است که در اختیار ما نیست و اگر جایی
+        // داخلش Exception پرتاب شود، اجرا تا catch سراسری بالا می‌رود و ۵۰۰ برمی‌گردد:
+        // پول کسر شده، فاکتور نیمه‌کاره باقی مانده و هیچ اکانتی هم ساخته نشده.
+        // شاخه‌ی پایین همین سه‌تا را برای پنلی که «نه» می‌گوید برمی‌گرداند؛ پنلی که
+        // کرش می‌کند دقیقاً همان‌قدر برای مشتری هزینه دارد.
+        try {
+            $remote = $managePanel->createUser(
+                $panel['name_panel'],
+                $product['code_product'],
+                $usernameAc,
+                $createPayload
+            );
+        } catch (Throwable $e) {
+            FaoximaLogger::exception($e, 'createUser threw', [
+                'user_id' => $this->user['id'],
+                'panel'   => $panel['name_panel'] ?? null,
+                'product' => $product['code_product'] ?? null,
+            ]);
+
+            if ($balanceChargedAtomically) {
+                balance_atomic_credit($this->user['id'], $priceToCharge);
+            }
+            try { FaoximaDb::execute('DELETE FROM invoice WHERE id_invoice = :o AND id_user = :u', [':o' => $orderId, ':u' => $this->user['id']]); } catch (Throwable $_) {}
+
+            $errorText = "⭕️ خطای ساخت اشتراک (Exception) \n✍️ دلیل خطا : \n{$e->getMessage()}\nآیدی کابر : {$this->user['id']}\nنام کاربری کاربر : @{$this->user['username']}\nنام پنل : {$panel['name_panel']}";
+            $this->reportToChannel($errorText, $errorReport);
+
+            FaoximaResponse::serverError('خطایی در ساخت اشتراک رخ داده است با پشتیبانی در ارتباط باشید');
+        }
 
         if (empty($remote['username'])) {
             $reason = is_array($remote) ? json_encode($remote['msg'] ?? $remote) : (string)$remote;
@@ -306,8 +339,18 @@ final class PurchaseHandler extends BaseHandler
 
 
         // سرویس واقعاً ساخته شد — حالا کد تخفیف مصرف‌شده حساب می‌شود.
+        // [FIX 5] خروجیِ markSellUsed حالا بولین است و ظرفیت کد را به‌صورت اتمیک
+        // برمی‌دارد. در این نقطه سرویس ساخته و مبلغ کسر شده است، پس اگر ظرفیت همین
+        // لحظه توسط کاربر دیگری پر شده باشد نمی‌توان خرید را رد کرد (کاربر سرویسِ
+        // تحویل‌شده‌اش را از دست می‌داد)؛ فقط ثبت می‌شود تا فروشنده متوجه شود.
         if (!empty($rxPendingDiscountCode)) {
-            MiniDiscount::markSellUsed($rxPendingDiscountCode, $this->user);
+            if (!MiniDiscount::markSellUsed($rxPendingDiscountCode, $this->user)) {
+                FaoximaLogger::warn('Discount capacity ran out after service was delivered', [
+                    'user_id'  => $this->user['id'] ?? null,
+                    'order_id' => $orderId,
+                    'code'     => $rxPendingDiscountCode,
+                ]);
+            }
             $rxPendingDiscountCode = null;
         }
 
@@ -394,9 +437,13 @@ final class PurchaseHandler extends BaseHandler
         }
 
 
+        // [FIX 12] فاکتورهای Unpaid (تلاش‌های ناتمامِ خرید) هم شمرده می‌شدند، پس یک
+        // تلاشِ رهاشده باعث می‌شد خریدِ اولِ واقعی «خرید دوم» به‌نظر برسد و پورسانتِ
+        // معرف هیچ‌وقت پرداخت نشود.
         $invoiceCount = (int) FaoximaDb::fetchScalar(
             "SELECT COUNT(*) FROM invoice
               WHERE name_product != 'سرویس تست'
+                AND Status != 'Unpaid'
                 AND id_user = :id",
             [':id' => $this->user['id']]
         );
@@ -557,7 +604,15 @@ final class PurchaseHandler extends BaseHandler
     private function buildCustomProduct(array $panel, array $customService): array
     {
         global $textbotlang;
-        $agent = $this->user['agent'] ?? 'f';
+        $agent = (string) ($this->user['agent'] ?? 'f');
+
+        // [FIX 2] روی پنلی که فروشنده حجم دلخواه را فعال نکرده، min و max هر دو صفر
+        // می‌شوند و حجم ۰ / زمان ۰ از اعتبارسنجی رد می‌شود و قیمت هم صفر درمی‌آید؛
+        // یعنی اکانت رایگانِ نامحدودِ بدون انقضا، آن هم به‌دفعات. پس اول فعال بودن
+        // فروش سرویس دلخواه را چک می‌کنیم.
+        if (!$this->customServiceIsOnSale($panel, $agent)) {
+            FaoximaResponse::fail(403, '⛔️ سرویس دلخواه روی این سرور برای شما فعال نیست.');
+        }
 
         $main  = $this->decodeJsonField($panel['mainvolume'] ?? null);
         $max   = $this->decodeJsonField($panel['maxvolume'] ?? null);
@@ -583,6 +638,10 @@ final class PurchaseHandler extends BaseHandler
 
         $price = ($volume * (float)($tp[$agent] ?? 0))
                + ($time   * (float)($timeP[$agent] ?? 0));
+
+        // [FIX 2] سرویس با قیمت صفر یا حجم/زمان صفر نباید فروخته شود؛ حجم ۰ روی پنل
+        // یعنی نامحدود و زمان ۰ یعنی بدون انقضا، و کیف‌پول هم اصلاً کسر نمی‌شود.
+        $this->assertCustomServiceIsSellable($volume, $time, $price);
 
         return [
             'code_product'      => 'customvolume',
@@ -670,14 +729,17 @@ final class PurchaseHandler extends BaseHandler
         $firstBuy = $invoiceCount === 1 ? '📌 خرید اول کاربر' : '';
         $when = jdate('Y/m/d H:i:s');
 
+        // [FIX 10] نام پنل و نام محصول از دیتابیس می‌آیند و اگر کاراکتر < داشته باشند،
+        // تلگرام کل پیام HTML را رد می‌کند و گزارش خرید اصلاً به کانال نمی‌رسد؛ پس
+        // فقط همین مقادیرِ درج‌شده escape می‌شوند (نه تگ‌های <code> خودِ متن).
         $text = "📣 جزئیات ساخت اکانت در مینی اپ ثبت شد .
 
 {$firstBuy}
 ▫️آیدی عددی کاربر : <code>{$this->user['id']}</code>
 ▫️نام کاربری کاربر :@{$this->user['username']}
 ▫️نام کاربری کانفیگ :{$usernameAc}
-▫️موقعیت سرویس : {$panel['name_panel']}
-▫️نام محصول :{$product['name_product']}
+▫️موقعیت سرویس : " . htmlspecialchars((string) $panel['name_panel'], ENT_QUOTES, 'UTF-8') . "
+▫️نام محصول :" . htmlspecialchars((string) $product['name_product'], ENT_QUOTES, 'UTF-8') . "
 ▫️زمان خریداری شده :{$product['Service_time']} روز
 ▫️حجم خریداری شده : {$product['Volume_constraint']} GB
 ▫️موجودی قبل خرید : {$balanceBefore} تومان
@@ -711,6 +773,10 @@ final class PurchaseHandler extends BaseHandler
 
     private function reportToChannel(string $text, string $topicId): void
     {
+        // [FIX 10] متن خطای پنل ممکن است شامل < باشد (مثلاً وقتی پنل یک صفحه‌ی HTML
+        // خطا برمی‌گرداند). تلگرام در حالت parse_mode=HTML چنین پیامی را دور می‌اندازد،
+        // یعنی دقیقاً همان‌جایی که هشدار بیشترین اهمیت را دارد، ادمین هیچ‌چیز نمی‌بیند.
+        $text = htmlspecialchars($text, ENT_QUOTES, 'UTF-8');
         $channel = $this->setting['Channel_Report'] ?? '';
         if ((string)$channel === '') return;
 

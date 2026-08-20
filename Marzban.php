@@ -270,6 +270,24 @@ function revoke_sub($username_account,$location)
     return $response;
 }
 
+// [FIX ساخته‌نشدن سرویس روی پنلی که پروتکل‌هایش انتخاب نشده]
+// ستون proxies برای پنلی که ادمین پروتکل‌هایش را تنظیم نکرده '' یا '[]' است.
+// json_decode('') برابر null و json_decode('[]') یک آرایه‌ی خالی است؛ هر دو موقعِ
+// json_encode به‌جای {} چیز دیگری می‌دهند و پنل با خطای ۴۲۲ جواب می‌دهد
+// («Input should be a valid dictionary…») — یعنی خریدِ مشتری با «خطا در ساخت
+// کانفیگ» شکست می‌خورد و ادمین هم پیامی می‌گیرد که از رویش کاری نمی‌آید.
+// stdClass خالی به‌صورت {} انکود می‌شود که پنل قبولش دارد و خودش به پروتکل‌های
+// اینباندهایش برمی‌گردد.
+if (!function_exists('rx_marzban_proxy_object')) {
+    function rx_marzban_proxy_object($raw)
+    {
+        $decoded = json_decode((string) $raw);
+        if (!is_object($decoded)) {
+            return new stdClass();
+        }
+        return $decoded;
+    }
+}
 function adduser($location,$data_limit,$username_ac,$timestamp,$note ='',$data_limit_reset = 'no_reset',$name_product = false)
 {
     global $pdo;
@@ -301,7 +319,7 @@ function adduser($location,$data_limit,$username_ac,$timestamp,$note ='',$data_l
     // نوع پنل pasargard باشد، بدون توجه به version_panel این شاخه اجرا می‌شود.
     if ((string)($marzban_list_get['version_panel'] ?? '0') === '1' || ($marzban_list_get['type'] ?? '') === 'pasargard') {
             $data = array(
-            "proxy_settings" => json_decode($marzban_list_get['proxies']),
+            "proxy_settings" => rx_marzban_proxy_object($marzban_list_get['proxies']),
             "data_limit" => $data_limit,
             "username" => $username_ac,
             "note" => $note,
@@ -345,7 +363,7 @@ function adduser($location,$data_limit,$username_ac,$timestamp,$note ='',$data_l
         }
     }else{
         $data = array(
-            "proxies" => json_decode($marzban_list_get['proxies']),
+            "proxies" => rx_marzban_proxy_object($marzban_list_get['proxies']),
             "data_limit" => $data_limit,
             "username" => $username_ac,
             "note" => $note,

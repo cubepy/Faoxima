@@ -31,6 +31,33 @@ final class PaymentReceiptHandler extends BaseHandler
             FaoximaResponse::badRequest('photo not accessible on server');
         }
 
+        // [FIX 9] فقط حجم فایل بررسی می‌شد، پس هر فایلی تا ۸ مگابایت به‌عنوان «رسید»
+        // برای همه‌ی ادمین‌ها ارسال می‌شد. رسید یعنی تصویر.
+        $receiptImage = @getimagesize($tmp);
+        if ($receiptImage === false
+            || !in_array($receiptImage[2] ?? 0, [IMAGETYPE_JPEG, IMAGETYPE_PNG, IMAGETYPE_WEBP], true)) {
+            FaoximaResponse::badRequest('❌ فایل باید یک تصویر (JPG، PNG یا WEBP) باشد.');
+        }
+
+        // [FIX 9] هر رسید یک عکس برای تک‌تک ادمین‌ها می‌فرستد و تنها فاکتورِ تأییدشده
+        // رد می‌شد؛ یعنی یک نفر می‌توانست بی‌نهایت بار همان فاکتور را دوباره بفرستد و
+        // کانال ادمین‌ها را پر کند. اصلاحِ واقعیِ رسید باید ممکن بماند، پس محدودیت
+        // می‌گذاریم نه ممنوعیت: حداکثر ۳ رسید در هر ۵ دقیقه.
+        try {
+            $recentReceipts = (int) FaoximaDb::fetchScalar(
+                "SELECT COUNT(*) FROM Payment_report
+                  WHERE id_user = :u
+                    AND payment_Status = 'waiting'
+                    AND time >= :since",
+                [':u' => (string)$this->user['id'], ':since' => date('Y/m/d H:i:s', time() - 300)]
+            );
+        } catch (Throwable $e) {
+            $recentReceipts = 0;
+        }
+        if ($recentReceipts >= 3) {
+            FaoximaResponse::fail(429, '⏳ به‌تازگی چند رسید فرستاده‌اید. چند دقیقه صبر کنید و اگر مشکلی هست با پشتیبانی در ارتباط باشید.');
+        }
+
 
         // [FIX] قید source = 'miniapp' برداشته شد. صاحبِ فاکتور همچنان با id_user
         // بررسی می‌شود، پس محدودیتی از دست نمی‌رود؛ ولی این قید باعث می‌شد رسیدِ
@@ -76,10 +103,9 @@ final class PaymentReceiptHandler extends BaseHandler
 
         global $APIKEY;
         $apiKey = is_string($APIKEY ?? null) ? $APIKEY : '';
-        if ($apiKey === '') {
-            $rowKey = select('setting', 'token_bot', null, null, 'select');
-            $apiKey = is_array($rowKey) ? (string)($rowKey['token_bot'] ?? '') : '';
-        }
+        // [FIX 11] فالبکِ خواندن token_bot از جدول setting حذف شد: چنین ستونی در این
+        // اسکیما وجود ندارد، پس select خطا پرتاب می‌کرد و به‌جای پیام تمیزِ ۵۰۳ که
+        // سه خط پایین‌تر آماده است، کاربر با خطای ۵۰۰ روبه‌رو می‌شد.
         if ($apiKey === '') {
             FaoximaResponse::fail(503, '❌ توکن ربات روی سرور تنظیم نشده است.');
         }

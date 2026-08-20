@@ -35,7 +35,13 @@ if (preg_match('/Confirmpay_user_(\w+)_(\w+)/', $datain, $dataget)) {
             'cache_time' => 5,
         ));
         update("Payment_report", "payment_Status", "paid", "id_order", $Payment_report['id_order']);
-        DirectPayment($Payment_report['id_order']);
+        // [FIX] same silent-failure risk as every other DirectPayment() caller — see
+        // lib/SafeDirectPayment.php.
+        if (function_exists('nm_safe_direct_payment')) {
+            nm_safe_direct_payment($Payment_report['id_order']);
+        } else {
+            DirectPayment($Payment_report['id_order']);
+        }
         $_uid = $Payment_report['id_user'];
         $_stmt = $connect->prepare("SELECT * FROM user WHERE id = ? LIMIT 1");
         $_stmt->bind_param("s", $_uid); $_stmt->execute();
@@ -55,7 +61,7 @@ if (preg_match('/Confirmpay_user_(\w+)_(\w+)/', $datain, $dataget)) {
             $text_report = sprintf($textbotlang['users']['Discount']['gift-deposit'], $result);
             sendmessage($from_id, $text_report, null, 'HTML');
         }
-        if (strlen($setting['Channel_Report'] ?? '') > 0) {
+        if (reportChannelIsSet($setting)) {
             telegram('sendmessage', [
                 'chat_id' => $setting['Channel_Report'],
                 'message_thread_id' => $paymentreports,
@@ -244,8 +250,11 @@ if (preg_match('/^sendresidcart-(.*)/', $datain, $dataget)) {
     $textdiscount = "";
     $format_price_cart = number_format($PaymentReport['price'], 0);
     if ($user['Processing_value_tow'] == "getconfigafterpay") {
-        $get_invoice = select("invoice", "*", "username", $user['Processing_value_one'], "select");
-        if ($get_invoice == false) {
+        // Scoped to the payer. Unscoped, a username shared with another
+        // customer put THEIR product, volume and duration on the receipt an
+        // admin is asked to confirm.
+        $get_invoice = rx_invoice_for_user((string) $user['Processing_value_one'], $from_id);
+        if (!is_array($get_invoice)) {
             sendmessage($from_id, "❌ خطایی رخ داده است لطفا مراحل خرید یا پرداخت  را مجدد انجام دهید", $keyboard, 'HTML');
             return;
         }
@@ -285,7 +294,19 @@ if (preg_match('/^sendresidcart-(.*)/', $datain, $dataget)) {
             return;
         }
         $service_other = json_decode($service_other['value'], true);
-        $nameloc = select("invoice", "*", "username", $usernamepanel, "select");
+        // Scoped to the payer. This row decides Service_location, which decides
+        // which panel's per-gigabyte and per-day rates the renewal is priced at —
+        // so an unscoped match does not show the wrong screen, it charges the
+        // wrong amount. The service_other query directly above has been scoped by
+        // id_user since it was written; this one never was.
+        $nameloc = rx_invoice_for_user((string) $usernamepanel, $from_id) ?: false;
+        if (!is_array($nameloc)) {
+            // Refusing is new. Before scoping, a stranger's row would have
+            // been found and priced against; now there is genuinely nothing,
+            // and dereferencing false would only turn that into warnings.
+            sendmessage($from_id, '❌ سرویس این تمدید پیدا نشد؛ لطفاً مراحل را از اول انجام دهید.', $keyboard, 'HTML');
+            return;
+        }
         $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
         $eextraprice = json_decode($marzban_list_get['pricecustomvolume'], true);
         $custompricevalue = $eextraprice[$user['agent']];
@@ -299,7 +320,19 @@ if (preg_match('/^sendresidcart-(.*)/', $datain, $dataget)) {
             $prodcut['Service_time'] = $service_other['Service_time'];
             $prodcut['Volume_constraint'] = $service_other['volumebuy'];
         } else {
-            $nameloc = select("invoice", "*", "username", $usernamepanel, "select");
+            // Scoped to the payer. This row decides Service_location, which decides
+            // which panel's per-gigabyte and per-day rates the renewal is priced at —
+            // so an unscoped match does not show the wrong screen, it charges the
+            // wrong amount. The service_other query directly above has been scoped by
+            // id_user since it was written; this one never was.
+            $nameloc = rx_invoice_for_user((string) $usernamepanel, $from_id) ?: false;
+            if (!is_array($nameloc)) {
+                // Refusing is new. Before scoping, a stranger's row would have
+                // been found and priced against; now there is genuinely nothing,
+                // and dereferencing false would only turn that into warnings.
+                sendmessage($from_id, '❌ سرویس این تمدید پیدا نشد؛ لطفاً مراحل را از اول انجام دهید.', $keyboard, 'HTML');
+                return;
+            }
             $_sloc = $nameloc['Service_location'];
             $_stmt = $connect->prepare("SELECT * FROM product WHERE (Location = ? OR Location = '/all') AND code_product = ?");
             $_stmt->bind_param("ss", $_sloc, $codeproduct); $_stmt->execute();
@@ -395,20 +428,47 @@ if (preg_match('/^sendresidcart-(.*)/', $datain, $dataget)) {
 توضیحات: $caption $text
 ✍️ در صورت درست بودن رسید پرداخت را تایید نمایید.";
     }
+    $rx_receiptNotified = false;
+    $rx_adminMsgMap = [];
     foreach ($admin_ids as $id_admin) {
         $adminrulecheck = select("admin", "*", "id_admin", $id_admin, "select");
         if ($adminrulecheck['rule'] == "support")
             continue;
+        $rx_photoOk = true;
         if ($photo) {
-            telegram('sendphoto', [
+            $rx_photoResult = telegram('sendphoto', [
                 'chat_id' => $id_admin,
                 'photo' => $photoid,
                 'caption' => $textbotlang['users']['Balance']['receiptimage'],
                 'parse_mode' => "HTML",
             ]);
+            $rx_photoOk = is_array($rx_photoResult) && !empty($rx_photoResult['ok']);
+            if (!$rx_photoOk) {
+                error_log('[panel_dispatch][getresidcurrency] sendphoto failed | admin=' . $id_admin . ' | order=' . $PaymentReport['id_order']);
+            }
         }
-        sendmessage($id_admin, $textsendrasid, $Confirm_pay, 'HTML');
+        $rx_textResult = sendmessage($id_admin, $textsendrasid, $Confirm_pay, 'HTML');
+        $rx_textOk = is_array($rx_textResult) && !empty($rx_textResult['ok']);
+        if (!$rx_textOk) {
+            error_log('[panel_dispatch][getresidcurrency] sendmessage failed | admin=' . $id_admin . ' | order=' . $PaymentReport['id_order']);
+        } elseif (!empty($rx_textResult['result']['message_id'])) {
+            $rx_adminMsgMap[(string) $id_admin] = (int) $rx_textResult['result']['message_id'];
+        }
+        if ($rx_photoOk || $rx_textOk) {
+            $rx_receiptNotified = true;
+        }
     }
+    if (!$rx_receiptNotified) {
+        error_log('[panel_dispatch][getresidcurrency] NO admin was notified at all | order=' . $PaymentReport['id_order'] . ' | user=' . $from_id);
+        if (reportChannelIsSet($setting)) {
+            telegram('sendmessage', [
+                'chat_id' => $setting['Channel_Report'],
+                'text' => "⚠️ هشدار: رسید پرداخت کاربر <a href=\"tg://user?id={$from_id}\">{$from_id}</a> (کد پیگیری: {$PaymentReport['id_order']}) به هیچ ادمینی ارسال نشد.\nلطفاً از بخش «رسیدهای تایید نشده» به‌صورت دستی بررسی شود.",
+                'parse_mode' => "HTML",
+            ]);
+        }
+    }
+    update("Payment_report", "admin_msgs", json_encode($rx_adminMsgMap), "id_order", $PaymentReport['id_order']);
     if ($user['Processing_value_tow'] == "getconfigafterpay") {
         sendmessage($from_id, $textbotlang['users']['Balance']['Send-receiptadnsendconfig'], $keyboard, 'HTML');
     } else {
@@ -421,10 +481,23 @@ if (preg_match('/^sendresidcart-(.*)/', $datain, $dataget)) {
 } elseif ($user['step'] == "cart_to_cart_user") {
     $format_balance = number_format($user['Balance'], 0);
     if (!$photo or isset($update['message']['media_group_id'])) {
-        sendmessage($from_id, "❌  فقط مجاز به ارسال یک تصویر هستید", null, 'HTML');
+        // [FIX] این پیام قبلاً مبهم بود ("فقط مجاز به ارسال یک تصویر هستید") و کاربر نمی‌فهمید
+        // دقیقاً چه کاری اشتباه کرده. علت رایج این خطا: رسید به‌صورت «فایل/سند» (نه عکس فشرده)
+        // یا به‌صورت چند عکس با هم (آلبوم) ارسال شده. راهنمایی صریح می‌دیم که دوباره درست بفرستد؛
+        // مرحله (step) کاربر دست‌نخورده می‌ماند تا بتواند بلافاصله رسید درست را بفرستد.
+        sendmessage($from_id, "❌ ارسال رسید شما موفق نبود.\n\nعلت معمول این خطا:\n▫️ تصویر به‌صورت «فایل» (Compress نشده) ارسال شده — لطفاً آن را به‌صورت «عکس» معمولی بفرستید، نه فایل.\n▫️ چند عکس با هم در یک آلبوم ارسال شده — لطفاً فقط یک عکس تنها بفرستید.\n\nلطفاً دوباره فقط تصویر رسید را (به‌صورت عکس، تکی) ارسال کنید.", null, 'HTML');
         return;
     }
     step('home', $from_id);
+    // [FIX] این کل بلوک قبلاً بدون try/catch بود. اگه هر جای این مسیر (که چندین select/DB
+    // lookup داره) خطای پیش‌بینی‌نشده می‌داد، اجرا همون‌جا متوقف می‌شد: نه پیام تاییدِ «رسید شما
+    // ارسال شد» به مشتری می‌رفت، نه پیام به ادمین‌ها، و چون Payment_report همچنان روی
+    // Unpaid/waiting می‌موند، کاربر با پیام «یک پرداخت تایید نشده دارید» برای همیشه قفل می‌شد
+    // (چون مسیر جدید cart_to_offline این رکورد رو به‌عنوان «در انتظار» می‌بینه). این چیزیه که
+    // برای بعضی کاربران خاص (احتمالاً به‌خاطر داده‌ی ناقص/غیرمنتظره روی فاکتورشون) پیش اومده.
+    // الان هر خطایی: (۱) به مشتری اطلاع می‌ده، (۲) سفارش گیرکرده رو خودکار رد می‌کنه تا بتونه
+    // دوباره تلاش کنه، (۳) با متن دقیق خطا به کانال ادمین گزارش می‌شه.
+    try {
     $PaymentReport = select("Payment_report", "*", "id_order", $user['Processing_value']);
     if ($PaymentReport == false) {
         sendmessage($from_id, '❌ خطایی در هنگام دریافت اطلاعات رخ داده است لطفا مراحل را از اول انجام دهید', $keyboard, 'HTML');
@@ -445,8 +518,11 @@ if (preg_match('/^sendresidcart-(.*)/', $datain, $dataget)) {
     $format_price_cart = number_format($PaymentReport['price'], 0);
     $split_data = explode('|', $PaymentReport['id_invoice']);
     if ($split_data[0] == "getconfigafterpay") {
-        $get_invoice = select("invoice", "*", "username", $split_data[1], "select");
-        if ($get_invoice == false) {
+        // Same lookup, same reason — the username here comes out of
+        // 'getconfigafterpay|<username>' and identifies a service, not a
+        // person.
+        $get_invoice = rx_invoice_for_user((string) ($split_data[1] ?? ''), $from_id);
+        if (!is_array($get_invoice)) {
             sendmessage($from_id, "❌ خطایی رخ داده است لطفا مراحل خرید یا پرداخت  را مجدد انجام دهید", $keyboard, 'HTML');
             return;
         }
@@ -484,7 +560,19 @@ if (preg_match('/^sendresidcart-(.*)/', $datain, $dataget)) {
             return;
         }
         $service_other = json_decode($service_other['value'], true);
-        $nameloc = select("invoice", "*", "username", $usernamepanel, "select");
+        // Scoped to the payer. This row decides Service_location, which decides
+        // which panel's per-gigabyte and per-day rates the renewal is priced at —
+        // so an unscoped match does not show the wrong screen, it charges the
+        // wrong amount. The service_other query directly above has been scoped by
+        // id_user since it was written; this one never was.
+        $nameloc = rx_invoice_for_user((string) $usernamepanel, $from_id) ?: false;
+        if (!is_array($nameloc)) {
+            // Refusing is new. Before scoping, a stranger's row would have
+            // been found and priced against; now there is genuinely nothing,
+            // and dereferencing false would only turn that into warnings.
+            sendmessage($from_id, '❌ سرویس این تمدید پیدا نشد؛ لطفاً مراحل را از اول انجام دهید.', $keyboard, 'HTML');
+            return;
+        }
         $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
         $eextraprice = json_decode($marzban_list_get['pricecustomvolume'], true);
         $custompricevalue = $eextraprice[$user['agent']];
@@ -498,7 +586,19 @@ if (preg_match('/^sendresidcart-(.*)/', $datain, $dataget)) {
             $prodcut['Service_time'] = $service_other['Service_time'];
             $prodcut['Volume_constraint'] = $service_other['volumebuy'];
         } else {
-            $nameloc = select("invoice", "*", "username", $usernamepanel, "select");
+            // Scoped to the payer. This row decides Service_location, which decides
+            // which panel's per-gigabyte and per-day rates the renewal is priced at —
+            // so an unscoped match does not show the wrong screen, it charges the
+            // wrong amount. The service_other query directly above has been scoped by
+            // id_user since it was written; this one never was.
+            $nameloc = rx_invoice_for_user((string) $usernamepanel, $from_id) ?: false;
+            if (!is_array($nameloc)) {
+                // Refusing is new. Before scoping, a stranger's row would have
+                // been found and priced against; now there is genuinely nothing,
+                // and dereferencing false would only turn that into warnings.
+                sendmessage($from_id, '❌ سرویس این تمدید پیدا نشد؛ لطفاً مراحل را از اول انجام دهید.', $keyboard, 'HTML');
+                return;
+            }
             $_sloc = $nameloc['Service_location'];
             $_stmt = $connect->prepare("SELECT * FROM product WHERE (Location = ? OR Location = '/all') AND code_product = ?");
             $_stmt->bind_param("ss", $_sloc, $codeproduct); $_stmt->execute();
@@ -590,21 +690,75 @@ if (preg_match('/^sendresidcart-(.*)/', $datain, $dataget)) {
 ✍️ در صورت درست بودن رسید پرداخت را تایید نمایید.";
         sendmessage($from_id, $textbotlang['users']['Balance']['Send-receipt'], $keyboard, 'HTML');
     }
+    $rx_receiptNotified = false;
+    $rx_adminMsgMap = [];
     foreach ($admin_ids as $id_admin) {
         $adminrulecheck = select("admin", "*", "id_admin", $id_admin, "select");
         if ($adminrulecheck['rule'] == "support")
             continue;
-        telegram('sendphoto', [
+        $rx_photoResult = telegram('sendphoto', [
             'chat_id' => $id_admin,
             'photo' => $photoid,
             'caption' => $caption,
             'parse_mode' => "HTML",
         ]);
-        sendmessage($id_admin, $textsendrasid, $Confirm_pay, 'HTML');
+        $rx_photoOk = is_array($rx_photoResult) && !empty($rx_photoResult['ok']);
+        if (!$rx_photoOk) {
+            error_log('[panel_dispatch][receipt] sendphoto failed | admin=' . $id_admin
+                . ' | order=' . $PaymentReport['id_order']
+                . ' | desc=' . ($rx_photoResult['description'] ?? 'unknown'));
+        }
+        $rx_textResult = sendmessage($id_admin, $textsendrasid, $Confirm_pay, 'HTML');
+        $rx_textOk = is_array($rx_textResult) && !empty($rx_textResult['ok']);
+        if (!$rx_textOk) {
+            error_log('[panel_dispatch][receipt] sendmessage failed too | admin=' . $id_admin
+                . ' | order=' . $PaymentReport['id_order']);
+        } elseif (!empty($rx_textResult['result']['message_id'])) {
+            // این آیدی پیام رو ذخیره می‌کنیم تا وقتی یه ادمین دیگه تایید/رد کرد،
+            // بتونیم پیامِ همین ادمین رو هم به‌روزرسانی کنیم (نه فقط منتظر کلیک خودش بمونیم).
+            $rx_adminMsgMap[(string) $id_admin] = (int) $rx_textResult['result']['message_id'];
+        }
+        if ($rx_photoOk || $rx_textOk) {
+            $rx_receiptNotified = true;
+        }
+    }
+    if (!$rx_receiptNotified) {
+        error_log('[panel_dispatch][receipt] NO admin was notified at all | order=' . $PaymentReport['id_order'] . ' | user=' . $from_id);
+        if (reportChannelIsSet($setting)) {
+            telegram('sendmessage', [
+                'chat_id' => $setting['Channel_Report'],
+                'text' => "⚠️ هشدار: رسید پرداخت کاربر <a href=\"tg://user?id={$from_id}\">{$from_id}</a> (کد پیگیری: {$PaymentReport['id_order']}) به هیچ ادمینی ارسال نشد.\nلطفاً از بخش «رسیدهای تایید نشده» به‌صورت دستی بررسی شود.",
+                'parse_mode' => "HTML",
+            ]);
+        }
     }
     update("Payment_report", "payment_Status", "waiting", "id_order", $PaymentReport['id_order']);
+    update("Payment_report", "admin_msgs", json_encode($rx_adminMsgMap), "id_order", $PaymentReport['id_order']);
     $dateacc = date('Y/m/d H:i:s');
     update("Payment_report", "at_updated", $dateacc, "id_order", $PaymentReport['id_order']);
+    } catch (Throwable $__rxReceiptErr) {
+        error_log('[panel_dispatch][receipt] FATAL during receipt processing | user=' . $from_id
+            . ' | order=' . ($user['Processing_value'] ?? '?')
+            . ' | err=' . $__rxReceiptErr->getMessage() . ' @ ' . $__rxReceiptErr->getFile() . ':' . $__rxReceiptErr->getLine());
+        try {
+            if (!empty($user['Processing_value'])) {
+                update("Payment_report", "payment_Status", "reject", "id_order", $user['Processing_value']);
+                update("Payment_report", "dec_not_confirmed", "خودکار رد شد؛ خطای پیش‌بینی‌نشده هنگام پردازش رسید (نیاز به بررسی دستی)", "id_order", $user['Processing_value']);
+            }
+        } catch (Throwable $__rxReceiptErr2) { /* fail-open */ }
+        sendmessage($from_id, "⚠️ در پردازش رسید شما خطایی رخ داد. برای این‌که در سفارش‌های بعدی گیر نکنید، این سفارش لغو شد — لطفاً دوباره از منوی پرداخت رسید را ارسال کنید. تیم پشتیبانی هم از این خطا مطلع شد.", $keyboard, 'HTML');
+        try {
+            $__rxSetting = function_exists('select') ? select('setting', '*', null, null, 'select') : [];
+            $__rxChannel = is_array($__rxSetting) ? (string)($__rxSetting['Channel_Report'] ?? '') : '';
+            if ($__rxChannel !== '' && function_exists('telegram')) {
+                telegram('sendmessage', [
+                    'chat_id' => $__rxChannel,
+                    'text' => "⭕️ <b>خطا در پردازش رسید کارت‌به‌کارت</b>\nکاربر <a href=\"tg://user?id={$from_id}\">{$from_id}</a> رسید فرستاد ولی هنگام پردازش خطا رخ داد و هیچ پیامی به ادمین نرفت. سفارش به‌صورت خودکار رد شد تا کاربر قفل نماند؛ لطفاً رسید را از تاریخچه‌ی کاربر دستی بررسی کنید.\n\n🛒 کد سفارش: <code>" . htmlspecialchars((string)($user['Processing_value'] ?? ''), ENT_QUOTES, 'UTF-8') . "</code>\n✍️ خطا: " . htmlspecialchars($__rxReceiptErr->getMessage(), ENT_QUOTES, 'UTF-8'),
+                    'parse_mode' => 'HTML',
+                ]);
+            }
+        } catch (Throwable $__rxReceiptErr3) { /* fail-open */ }
+    }
 } elseif ($datain == "Discount") {
     $bakinfos = json_encode([
         'inline_keyboard' => [
@@ -657,7 +811,7 @@ if (preg_match('/^sendresidcart-(.*)/', $datain, $dataget)) {
         ':code' => $text,
     ]);
     $text_report = sprintf($textbotlang['users']['Discount']['giftcodeused'], $username, $from_id, $text);
-    if (strlen($setting['Channel_Report'] ?? '') > 0) {
+    if (reportChannelIsSet($setting)) {
         telegram('sendmessage', [
             'chat_id' => $setting['Channel_Report'],
             'message_thread_id' => $otherreport,
@@ -798,7 +952,7 @@ $text_porsant
   - موجودی معرف قبل از هدیه : {$useraffiliates['Balance']}
  - موجودی معرف بعد از هدیه : $Balance_add_regent
  ";
-    if (strlen($setting['Channel_Report'] ?? '') > 0) {
+    if (reportChannelIsSet($setting)) {
         telegram('sendmessage', [
             'chat_id' => $setting['Channel_Report'],
             'message_thread_id' => $porsantreport,
@@ -916,7 +1070,7 @@ $text_porsant
 نام کاربری سرویس : {$user['Processing_value']}
 دلیل خطا : {$extra_volume['msg']}";
         sendmessage($from_id, "❌خطایی در خرید حجم اضافه سرویس رخ داده با پشتیبانی در ارتباط باشید", null, 'HTML');
-        if (strlen($setting['Channel_Report'] ?? '') > 0) {
+        if (reportChannelIsSet($setting)) {
             telegram('sendmessage', [
                 'chat_id' => $setting['Channel_Report'],
                 'message_thread_id' => $errorreport,
@@ -949,7 +1103,7 @@ $text_porsant
     $volumes = $volume / $extrapricevalue;
     $volumes = number_format($volumes, 0);
     $text_report = sprintf($textbotlang['Admin']['reportgroup']['volumepurchase'], $from_id, $volumes, $volume, $user['Balance'], $user['Processing_value']);
-    if (strlen($setting['Channel_Report'] ?? '') > 0) {
+    if (reportChannelIsSet($setting)) {
         telegram('sendmessage', [
             'chat_id' => $setting['Channel_Report'],
             'message_thread_id' => $otherservice,
@@ -1202,7 +1356,7 @@ $text_porsant
         $price = number_format($setting['wheelـluck_price']);
         sendmessage($from_id, sprintf($textbotlang['users']['wheel_luck']['winner-congratulations'], $price), null, 'HTML');
         $pricelast = $setting['wheelـluck_price'];
-        if (strlen($setting['Channel_Report'] ?? '') > 0) {
+        if (reportChannelIsSet($setting)) {
             telegram('sendmessage', [
                 'chat_id' => $setting['Channel_Report'],
                 'message_thread_id' => $otherreport,
@@ -1482,7 +1636,7 @@ $text_porsant
 ▫️ یاداشت جدید :‌  $text
 
 زمان تغییر یادداشت : $timejalali ";
-    if (strlen($setting['Channel_Report'] ?? '') > 0) {
+    if (reportChannelIsSet($setting)) {
         telegram('sendmessage', [
             'chat_id' => $setting['Channel_Report'],
             'message_thread_id' => $otherreport,

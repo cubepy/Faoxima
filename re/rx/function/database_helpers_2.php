@@ -293,6 +293,65 @@ if (!function_exists('balance_atomic_credit')) {
     }
 }
 
+// [FIX] کسرِ اتمیکِ سهمِ کیف پول.
+// شاخه‌های تمدید/حجم اضافه/زمان اضافه موجودی را با عددِ ثابتِ صفر بازنویسی
+// می‌کردند («کیف پول همه‌اش خرج شد»)، ولی این عدد در لحظه‌ی «تایید» نوشته می‌شد
+// نه لحظه‌ی صدور فاکتور. فاصله‌ی بین ثبت رسید و تایید ادمین ساعت‌ها است و هر
+// شارژ/هدیه/کش‌بک/پورسانتی که در این فاصله برسد نابود می‌شد.
+// این تابع فقط سهمِ واقعی را کم می‌کند و هیچ‌وقت موجودی را منفی نمی‌کند.
+if (!function_exists('balance_atomic_deduct')) {
+
+    function balance_atomic_deduct($userId, $amount) {
+        global $pdo;
+        $amount = (float) $amount;
+        $userId = (string) $userId;
+        if ($userId === '' || $amount <= 0 || !isset($pdo)) return false;
+        try {
+            $stmt = $pdo->prepare(
+                "UPDATE user SET Balance = GREATEST(CAST(Balance AS DECIMAL(20,2)) - :d, 0) WHERE id = :u"
+            );
+            $stmt->execute([':d' => $amount, ':u' => $userId]);
+            return $stmt->rowCount() > 0;
+        } catch (Throwable $e) {
+            error_log('balance_atomic_deduct failed: ' . $e->getMessage());
+            return false;
+        }
+    }
+}
+
+// [FIX] محاسبه‌ی امنِ «سهمِ کیف پول» برای شاخه‌های حجم/زمانِ اضافه.
+// در آن شاخه‌ها قیمتِ کلِ سفارش مستقیماً در دسترس نیست (از جدولِ قیمتِ پنل
+// بازسازی می‌شود). این تابع محافظه‌کارانه عمل می‌کند:
+//   • اگر سهمِ واقعی معلوم باشد، همان کم می‌شود؛
+//   • اگر معلوم نباشد، دقیقاً مثل قبل کلِ موجودی کم می‌شود (پس هیچ سفارشی
+//     کم‌تر از قبل حساب نمی‌شود و ضرری متوجه فروشنده نیست)؛
+//   • هیچ‌وقت بیشتر از موجودیِ فعلی کم نمی‌کند.
+if (!function_exists('rx_wallet_share_paid')) {
+
+    function rx_wallet_share_paid($recorded, $reconstructed, $balanceNow) {
+        $balanceNow = (float) $balanceNow;
+        if ($balanceNow <= 0) {
+            return 0.0;
+        }
+        $share = null;
+        if ($recorded !== null && $recorded !== '' && is_numeric($recorded)) {
+            $share = (float) $recorded;
+        } elseif ($reconstructed !== null && is_numeric($reconstructed)) {
+            $share = (float) $reconstructed;
+        }
+        if ($share === null) {
+            return $balanceNow;
+        }
+        if ($share < 0) {
+            $share = 0.0;
+        }
+        if ($share > $balanceNow) {
+            $share = $balanceNow;
+        }
+        return $share;
+    }
+}
+
 
 function StatusPayment($paymentid)
 {
@@ -621,64 +680,6 @@ function generateUsername($from_id, $Metode, $username, $randomString, $text, $n
         return $usernamecustom . "_" . $user['number_username'];
     }
 }
-if (!function_exists('rxUsernameTaken')) {
-function rxUsernameTaken($name_panel, $candidate, $usernameinvoice)
-{
-    global $ManagePanel;
-    if (is_array($usernameinvoice) && in_array($candidate, $usernameinvoice)) {
-        return true;
-    }
-    try {
-        $panelManager = (isset($ManagePanel) && $ManagePanel instanceof ManagePanel) ? $ManagePanel : new ManagePanel();
-        $DataUserOut = $panelManager->DataUser($name_panel, $candidate);
-    } catch (Throwable $rxTakenErr) {
-        // If the panel cannot be queried, assume taken — a duplicate name on
-        // the panel is worse than skipping one counter value.
-        return true;
-    }
-    return isset($DataUserOut['username']);
-}
-}
-if (!function_exists('rxResolveUsernameCollision')) {
-function rxResolveUsernameCollision($marzban_list_get, $username_ac, $usernameinvoice, $from_id)
-{
-    // The sequential counters (numbercount / number_username) only advance
-    // after a *successful* purchase, while every started purchase already
-    // inserts an 'unpaid' invoice row holding the generated username. Any
-    // abandoned/unpaid order therefore keeps its username occupied, the next
-    // buyer collides, and the old code prepended rand(1000000,9999999)_ —
-    // producing names like 7098859_cubevip_599. Instead, advance the counter
-    // to the next free value so names stay clean (cubevip_600, cubevip_601…).
-    $method = $marzban_list_get['MethodUsername'] ?? '';
-    $panelName = $marzban_list_get['name_panel'] ?? '';
-    $globalSeq = in_array($method, ["متن دلخواه + عدد ترتیبی", "متن دلخواه نماینده + عدد ترتیبی"]);
-    $userSeq = in_array($method, ["نام کاربری + عدد به ترتیب", "آیدی عددی+عدد ترتیبی"]);
-    if (($globalSeq || $userSeq) && preg_match('/^(.*)_(\d+)$/', $username_ac, $rxParts)) {
-        $base = $rxParts[1];
-        $number = intval($rxParts[2]);
-        for ($i = 1; $i <= 30; $i++) {
-            $candidate = strtolower($base . "_" . ($number + $i));
-            if (!rxUsernameTaken($panelName, $candidate, $usernameinvoice)) {
-                if ($globalSeq) {
-                    update("setting", "numbercount", $number + $i);
-                } else {
-                    update("user", "number_username", $number + $i, "id", $from_id);
-                }
-                return $candidate;
-            }
-        }
-    }
-    // Non-sequential methods (or 30 consecutive taken values): append a short
-    // random suffix — still readable, and never a digit-prefixed name.
-    for ($i = 0; $i < 10; $i++) {
-        $candidate = strtolower($username_ac . "_" . rand(100, 999));
-        if (!rxUsernameTaken($panelName, $candidate, $usernameinvoice)) {
-            return $candidate;
-        }
-    }
-    return strtolower($username_ac . "_" . rand(1000000, 9999999));
-}
-}
 function outputlunk($text)
 {
     $ch = curl_init();
@@ -779,6 +780,7 @@ function normalizeServiceConfigs($configs, $subscriptionUrl = null)
 }
 function DirectPayment($order_id, $image = 'images.jpg')
 {
+    if (function_exists('cubepay_log')) cubepay_log('DP: enter', ['order' => $order_id]);
     global $pdo, $ManagePanel, $textbotlang, $keyboardextendfnished, $keyboard, $Confirm_pay, $from_id, $message_id, $datatextbot;
     $buyreport = select("topicid", "idreport", "report", "buyreport", "select")['idreport'];
     $admin_ids = select("admin", "id_admin", null, null, "FETCH_COLUMN");
@@ -796,31 +798,43 @@ function DirectPayment($order_id, $image = 'images.jpg')
     update("user", "Processing_value_one", "0", "id", $Balance_id['id']);
     update("user", "Processing_value_tow", "0", "id", $Balance_id['id']);
     update("user", "Processing_value_four", "0", "id", $Balance_id['id']);
+    if (function_exists('cubepay_log')) cubepay_log('DP: flow', ['step' => $steppay[0] ?? '?']);
     if ($steppay[0] == "getconfigafterpay") {
         // [invoice lookup with fallbacks] گاهی به‌خاطر race/cleanup/timing بین crypto-pay و DirectPayment،
         // فاکتور با username + Status='unpaid' پیدا نمیشه. چندتا fallback می‌گذاریم تا قبل از refund همه گزینه‌ها تست بشن.
         $__invUsername = isset($steppay[1]) ? trim((string)$steppay[1]) : '';
         $get_invoice = false;
         if ($__invUsername !== '') {
+            // [FIX بحرانی — فاکتورِ کاربرِ دیگری تحویل داده می‌شد]
+            // نام کاربریِ سرویس در کلِ فروشگاه یکتا نیست: چکِ تکراری‌بودن فقط روی
+            // «یک» پنل انجام می‌شود و در حالت «نام کاربری دلخواه» خودِ مشتری اسم را
+            // تایپ می‌کند. پس دو مشتری روی دو پنل می‌توانند هر دو "ali" داشته باشند.
+            // سه جستجوی زیر id_user نداشتند، یعنی پرداختِ مشتری A می‌توانست فاکتورِ
+            // پرداخت‌نشده‌ی مشتری B را پیدا کند، سرویسِ B را بسازد و فاکتورِ B را
+            // پرداخت‌شده علامت بزند — و A هیچ چیزی نگیرد.
+            // ORDER BY id_invoice هم تفکیک‌کننده نبود چون id_invoice هگزِ تصادفی است
+            // (نه ترتیبِ زمانی)؛ با دو کاندید، انتخاب عملاً شیر یا خط بود.
+            // Payment_report.id_user در همه‌ی مسیرها (ربات، مینی‌اپ، تاییدِ دستیِ ادمین)
+            // صاحبِ فاکتور است، پس محدودکردن به id_user چیزی را از دست نمی‌دهد.
             try {
-                // 1) دقیقا مثل قبل: username + Status='unpaid'
-                $stmt = $pdo->prepare("SELECT * FROM invoice WHERE username = :u AND Status = 'unpaid' ORDER BY id_invoice DESC LIMIT 1");
-                $stmt->execute([':u' => $__invUsername]);
+                // 1) username + Status='unpaid' — محدود به همین کاربر
+                $stmt = $pdo->prepare("SELECT * FROM invoice WHERE username = :u AND id_user = :uid AND Status = 'unpaid' ORDER BY time_sell DESC LIMIT 1");
+                $stmt->execute([':u' => $__invUsername, ':uid' => $Balance_id['id']]);
                 $get_invoice = $stmt->fetch(PDO::FETCH_ASSOC);
             } catch (Throwable $__e) { $get_invoice = false; }
             if (!$get_invoice) {
                 try {
                     // 2) بدون فیلتر Status (در صورت تفاوت case یا تغییر status توسط cron دیگه)
-                    $stmt = $pdo->prepare("SELECT * FROM invoice WHERE username = :u ORDER BY id_invoice DESC LIMIT 1");
-                    $stmt->execute([':u' => $__invUsername]);
+                    $stmt = $pdo->prepare("SELECT * FROM invoice WHERE username = :u AND id_user = :uid ORDER BY time_sell DESC LIMIT 1");
+                    $stmt->execute([':u' => $__invUsername, ':uid' => $Balance_id['id']]);
                     $get_invoice = $stmt->fetch(PDO::FETCH_ASSOC);
                 } catch (Throwable $__e) { $get_invoice = false; }
             }
             if (!$get_invoice) {
                 try {
                     // 3) case-insensitive روی username — اگه collation داره فرق می‌کنه
-                    $stmt = $pdo->prepare("SELECT * FROM invoice WHERE LOWER(username) = LOWER(:u) ORDER BY id_invoice DESC LIMIT 1");
-                    $stmt->execute([':u' => $__invUsername]);
+                    $stmt = $pdo->prepare("SELECT * FROM invoice WHERE LOWER(username) = LOWER(:u) AND id_user = :uid ORDER BY time_sell DESC LIMIT 1");
+                    $stmt->execute([':u' => $__invUsername, ':uid' => $Balance_id['id']]);
                     $get_invoice = $stmt->fetch(PDO::FETCH_ASSOC);
                 } catch (Throwable $__e) { $get_invoice = false; }
             }
@@ -846,6 +860,7 @@ function DirectPayment($order_id, $image = 'images.jpg')
         }
         // اگه با هیچ روشی پیدا نشد، قبل از اینکه به refund برسیم به ادمین گزارش بدیم و مستقیم برگردیم
         if (!$get_invoice) {
+            if (function_exists('cubepay_log')) cubepay_log('DP: invoice NOT FOUND - aborting');
             if (function_exists('error_log')) {
                 @error_log("[DirectPayment] invoice NOT FOUND for order={$order_id} user={$Balance_id['id']} steppay[1]={$__invUsername} — aborting WITHOUT refund (so cryptocheck stuck-refund can handle it cleanly)");
             }
@@ -864,7 +879,7 @@ function DirectPayment($order_id, $image = 'images.jpg')
                     'parse_mode' => 'HTML',
                 ]);
             }
-            return;
+            return false;
         }
         $userAgent = $Balance_id['agent'] ?? 'f';
         $stmt = $pdo->prepare("SELECT * FROM product WHERE name_product = :name AND (Location = :loc OR Location = '/all') AND (agent = :agent OR agent = 'all')");
@@ -908,7 +923,7 @@ function DirectPayment($order_id, $image = 'images.jpg')
                     'parse_mode' => 'HTML',
                 ]);
             }
-            return;
+            return false;
         }
 
         // [idempotent-refund guard] اگر این فاکتور قبلاً refund خورده (نشانه auto-refund تو dec_not_confirmed)،
@@ -923,7 +938,7 @@ function DirectPayment($order_id, $image = 'images.jpg')
             }
         } catch (Throwable $__e) { $__alreadyRefunded = false; }
         if ($__alreadyRefunded) {
-            return;
+            return false;
         }
 
         // [username normalize] اگر یوزرنیم فاکتور خالی/کوتاه‌تر از 3 کاراکتر بود، یکی معتبر بساز.
@@ -962,8 +977,10 @@ function DirectPayment($order_id, $image = 'images.jpg')
                 sendmessage($Balance_id['id'], $textbotlang['users']['selectoption'], $keyboard, 'HTML');
                 return;
             }
-            $balance = $Balance_id['Balance'] + $Payment_report['price'];
-            update("user", "Balance", $balance, "id", $Balance_id['id']);
+            // [FIX بازگشتِ وجهِ اتمیک] عددِ کهنه‌ی موجودی بازنویسی می‌شد و هر
+            // شارژ/هدیه‌ای که هم‌زمان می‌رسید از بین می‌رفت.
+            balance_atomic_credit($Balance_id['id'], (float) ($Payment_report['price'] ?? 0));
+            $balance = (float) $Balance_id['Balance'] + (float) $Payment_report['price'];
             // [refund-marker] برای جلوگیری از double-refund توسط retry
             try {
                 $__nationalNote = '[auto-refund: national stock empty at ' . date('Y-m-d H:i:s') . ']';
@@ -971,7 +988,7 @@ function DirectPayment($order_id, $image = 'images.jpg')
                 $__mk->execute([':n1' => $__nationalNote, ':n2' => $__nationalNote, ':o' => $order_id]);
             } catch (Throwable $__e) { /* fail-open */ }
             sendmessage($Balance_id['id'], "❌ وضعیت نت ملی فعال است اما موجودی انبار برای این محصول تمام شده است. مبلغ پرداختی به کیف پول برگشت خورد.", $keyboard, 'HTML');
-            return;
+            return false;
         }
         // [zombie-rescue] قبل از تلاش جدید، اگه قبلاً تو panel یوزری برای این کاربر ساخته شده (zombie)،
         // اول بررسی کن: شاید createUser تو call قبلی موفق بوده فقط response نرسیده. اگه پیدا کردیم،
@@ -1000,9 +1017,11 @@ function DirectPayment($order_id, $image = 'images.jpg')
             } catch (Throwable $__e) { /* fail-open */ }
         }
 
+        if (function_exists('cubepay_log')) cubepay_log('DP: calling createUser', ['panel' => $marzban_list_get['name_panel'] ?? '?', 'user' => $username_ac]);
         if (empty($dataoutput) || empty($dataoutput['username'])) {
             $dataoutput = $ManagePanel->createUser($marzban_list_get['name_panel'], $info_product['code_product'], $username_ac, $datac);
         }
+        if (function_exists('cubepay_log')) cubepay_log('DP: createUser returned', ['username' => $dataoutput['username'] ?? null]);
 
         // [duplicate retry — حداکثر 1 بار] اگه createUser duplicate برگردوند، فقط یک بار با random جدید retry می‌کنیم.
         try {
@@ -1051,13 +1070,16 @@ function DirectPayment($order_id, $image = 'images.jpg')
         if ($dataoutput['username'] == null && function_exists('nmPanelEmergencyEnabled') && nmPanelEmergencyEnabled($marzban_list_get)) {
             if (nmStockCompleteBuyFromInventory($Balance_id['id'], $Balance_id, $marzban_list_get, $info_product, $get_invoice['id_invoice'], $username_ac, false, 'paid_emergency_stock')) {
                 sendmessage($Balance_id['id'], $textbotlang['users']['selectoption'], $keyboard, 'HTML');
-                return;
+                return true;
             }
         }
         if ($dataoutput['username'] == null) {
+            if (function_exists('cubepay_log')) cubepay_log('DP: creation FAILED - refund path');
             $dataoutput['msg'] = json_encode($dataoutput['msg']);
-            $balance = $Balance_id['Balance'] + $Payment_report['price'];
-            update("user", "Balance", $balance, "id", $Balance_id['id']);
+            // [FIX بازگشتِ وجهِ اتمیک] عددِ کهنه‌ی موجودی بازنویسی می‌شد و هر
+            // شارژ/هدیه‌ای که هم‌زمان می‌رسید از بین می‌رفت.
+            balance_atomic_credit($Balance_id['id'], (float) ($Payment_report['price'] ?? 0));
+            $balance = (float) $Balance_id['Balance'] + (float) $Payment_report['price'];
             // [refund-marker] برای جلوگیری از double-refund توسط retry — حتماً قبل از sendmessageها مارک کن
             try {
                 $__failNote = '[auto-refund: service creation failed at ' . date('Y-m-d H:i:s') . ']';
@@ -1085,7 +1107,7 @@ function DirectPayment($order_id, $image = 'images.jpg')
                     'parse_mode' => "HTML"
                 ]);
             }
-            return;
+            return false;
         }
         $Shoppinginfo = json_encode([
             'inline_keyboard' => [
@@ -1102,53 +1124,9 @@ function DirectPayment($order_id, $image = 'images.jpg')
             }
         }
         $output_config_link = $marzban_list_get['sublink'] == "onsublink" ? $dataoutput['subscription_url'] : "";
-        // [FIX] «فقط QR تحویل داده می‌شود، بدون متن و بدون لینک ساب».
-        //
-        // قالبِ پیامِ تحویل از جدول textbot می‌آید. وقتی DirectPayment از کال‌بکِ
-        // درگاه (نه از وبهوکِ ربات) صدا زده می‌شود، این قالب همان لحظه از دیتابیس
-        // خوانده می‌شود؛ و اگر درست در همان لحظه اتصال در دسترس نباشد — که با
-        // خطای 1040 روی هاست اشتراکی پیش می‌آید — select() به‌جای خطا آرایه‌ی
-        // خالی برمی‌گرداند. نتیجه: کپشن خالی و QR بدون لینک اشتراک. کارت‌به‌کارت
-        // و کیف پول سالم‌اند چون داخل وبهوک اجرا می‌شوند و قالب از قبل لود شده.
-        //
-        // پول گرفته شده و سرویس ساخته شده، پس تحویلِ لینک نباید به در دسترس بودنِ
-        // قالب گره بخورد: یک بار دیگر تلاش می‌کنیم و در نهایت از قالبِ پیش‌فرضِ
-        // داخلی استفاده می‌کنیم تا لینک اشتراک همیشه به مشتری برسد.
-        $rxDeliveryTemplate = (string) ($datatextbot['textafterpay'] ?? '');
-        if (trim($rxDeliveryTemplate) === '') {
-            $rxRetryRows = select('textbot', '*', null, null, 'fetchAll');
-            if (is_array($rxRetryRows)) {
-                foreach ($rxRetryRows as $rxRow) {
-                    if (($rxRow['id_text'] ?? '') === 'textafterpay') {
-                        $rxDeliveryTemplate = (string) ($rxRow['text'] ?? '');
-                        break;
-                    }
-                }
-            }
-        }
-        if (trim($rxDeliveryTemplate) === '') {
-            error_log('DirectPayment: textafterpay template unavailable, using built-in fallback (order=' . $order_id . ')');
-            $rxDeliveryTemplate = "\xE2\x9C\x85 سرویس با موفقیت ایجاد شد\n\n"
-                . "\xF0\x9F\x91\xA4 نام کاربری سرویس : {username}\n"
-                . "\xF0\x9F\x8C\xBF نام سرویس : {name_service}\n"
-                . "\xF0\x9F\x87\xBA\xF0\x9F\x87\xB3 لوکیشن : {location}\n"
-                . "\xE2\x8F\xB3 مدت زمان : {day} روز\n"
-                . "\xF0\x9F\x97\x9C حجم سرویس : {volume} گیگابایت\n\n"
-                . "{connection_links}";
-        }
-        $datatextbot['textafterpay'] = $rxDeliveryTemplate;
-        $datatextbot['textmanual'] = (string) ($datatextbot['textmanual'] ?? '');
-        $datatextbot['text_wgdashboard'] = (string) ($datatextbot['text_wgdashboard'] ?? '');
-        $datatextbot['textafterpayibsng'] = (string) ($datatextbot['textafterpayibsng'] ?? '');
-        if ($marzban_list_get['type'] == "Manualsale" && trim($datatextbot['textmanual']) !== '') {
-            $datatextbot['textafterpay'] = $datatextbot['textmanual'];
-        }
-        if ($marzban_list_get['type'] == "WGDashboard" && trim($datatextbot['text_wgdashboard']) !== '') {
-            $datatextbot['textafterpay'] = $datatextbot['text_wgdashboard'];
-        }
-        if (($marzban_list_get['type'] == "ibsng" || $marzban_list_get['type'] == "mikrotik") && trim($datatextbot['textafterpayibsng']) !== '') {
-            $datatextbot['textafterpay'] = $datatextbot['textafterpayibsng'];
-        }
+        $datatextbot['textafterpay'] = $marzban_list_get['type'] == "Manualsale" ? $datatextbot['textmanual'] : $datatextbot['textafterpay'];
+        $datatextbot['textafterpay'] = $marzban_list_get['type'] == "WGDashboard" ? $datatextbot['text_wgdashboard'] : $datatextbot['textafterpay'];
+        $datatextbot['textafterpay'] = $marzban_list_get['type'] == "ibsng" || $marzban_list_get['type'] == "mikrotik" ? $datatextbot['textafterpayibsng'] : $datatextbot['textafterpay'];
         if (intval($get_invoice['Service_time']) == 0)
             $get_invoice['Service_time'] = $textbotlang['users']['stateus']['Unlimited'];
         $textcreatuser = str_replace('{username}', $dataoutput['username'], $datatextbot['textafterpay']);
@@ -1161,7 +1139,9 @@ function DirectPayment($order_id, $image = 'images.jpg')
             $textcreatuser = str_replace('{password}', $dataoutput['subscription_url'], $textcreatuser);
             update("invoice", "user_info", $dataoutput['subscription_url'], "id_invoice", $get_invoice['id_invoice']);
         }
+        if (function_exists('cubepay_log')) cubepay_log('DP: sending delivery message');
         sendMessageService($marzban_list_get, $dataoutput['configs'], $output_config_link, $dataoutput['username'], $Shoppinginfo, $textcreatuser, $get_invoice['id_invoice'], $get_invoice['id_user'], $image);
+        if (function_exists('cubepay_log')) cubepay_log('DP: delivery message sent');
         $partsdic = explode("_", $Balance_id['Processing_value_four'], $get_invoice['id_user']);
         if ($partsdic[0] == "dis") {
             $SellDiscountlimit = select("DiscountSell", "*", "codeDiscount", $partsdic[1], "select");
@@ -1196,9 +1176,12 @@ function DirectPayment($order_id, $image = 'images.jpg')
                         $scorenew = $user_Balance['score'] + 2;
                         update("user", "score", $scorenew, "id", $Balance_id['affiliates']);
                     }
-                    $Balance_prim = $user_Balance['Balance'] + $result;
+                    // [FIX نابودیِ درآمدِ معرف] پورسانت به کاربرِ *دیگری* واریز
+                    // می‌شود؛ موجودی او خوانده می‌شد، بعد پیام تلگرام می‌رفت، و
+                    // سپس عددِ کهنه بازنویسی می‌شد — هر خرید یا درآمدی که آن
+                    // کاربر در همان لحظه داشت پاک می‌شد. افزایشِ اتمیک.
                     $dateacc = date('Y/m/d H:i:s');
-                    update("user", "Balance", $Balance_prim, "id", $Balance_id['affiliates']);
+                    balance_atomic_credit($Balance_id['affiliates'], (float) $result);
                     $result = number_format($result);
                     $textadd = "🎁  پرداخت پورسانت
 
@@ -1225,9 +1208,9 @@ function DirectPayment($order_id, $image = 'images.jpg')
                     $scorenew = $user_Balance['score'] + 2;
                     update("user", "score", $scorenew, "id", $Balance_id['affiliates']);
                 }
-                $Balance_prim = $user_Balance['Balance'] + $result;
+                // [FIX نابودیِ درآمدِ معرف] — مثل شاخه‌ی بالا.
                 $dateacc = date('Y/m/d H:i:s');
-                update("user", "Balance", $Balance_prim, "id", $Balance_id['affiliates']);
+                balance_atomic_credit($Balance_id['affiliates'], (float) $result);
                 $result = number_format($result);
                 $textadd = "🎁  پرداخت پورسانت
 
@@ -1262,7 +1245,33 @@ function DirectPayment($order_id, $image = 'images.jpg')
         if ($Balance_prims <= 0) {
             $Balance_prims = 0;
         }
-        update("user", "Balance", $Balance_prims, "id", $Balance_id['id']);
+        if (function_exists('cubepay_log')) cubepay_log('DP: deducting wallet', ['portion' => $__walletPortion, 'balance_before' => $Balance_id['Balance'], 'balance_after' => $Balance_prims]);
+        // کسرِ اتمیک و «حداکثر یک‌بار برای همیشه»: اول ادعای مارکر [wallet-done]
+        // روی Payment_report (فقط اگر قبلاً نخورده)، بعد کسرِ موجودی — هر دو در
+        // یک تراکنش. اگر وسطش هر بلایی سرِ پروسه بیاید، یا هر دو ثبت شده‌اند یا
+        // هیچ‌کدام؛ و بازیابیِ successful.php بعداً همین ادعا را تکرار می‌کند.
+        try {
+            $pdo->beginTransaction();
+            $__claim = $pdo->prepare(
+                "UPDATE Payment_report SET dec_not_confirmed = CONCAT(COALESCE(dec_not_confirmed,''), ' [wallet-done]')
+                 WHERE id_order = ? AND (dec_not_confirmed IS NULL OR dec_not_confirmed NOT LIKE '%[wallet-done]%')"
+            );
+            $__claim->execute([$order_id]);
+            if ($__claim->rowCount() === 1) {
+                if ($__walletPortion > 0) {
+                    $pdo->prepare("UPDATE user SET Balance = GREATEST(0, CAST(Balance AS DECIMAL(20,2)) - ?) WHERE id = ?")
+                        ->execute([$__walletPortion, $Balance_id['id']]);
+                }
+                $pdo->commit();
+                if (function_exists('cubepay_log')) cubepay_log('DP: wallet deducted', ['claimed' => 'yes', 'portion' => $__walletPortion]);
+            } else {
+                $pdo->rollBack();
+                if (function_exists('cubepay_log')) cubepay_log('DP: wallet already deducted — skipped');
+            }
+        } catch (Throwable $__we) {
+            try { $pdo->rollBack(); } catch (Throwable $__ignored) {}
+            if (function_exists('cubepay_log')) cubepay_log('DP: wallet deduction FAILED — rescue will retry', ['error' => $__we->getMessage()]);
+        }
         $balanceformatsell = select("user", "Balance", "id", $get_invoice['id_user'], "select")['Balance'];
         $balanceformatsell = number_format($balanceformatsell, 0);
         $balancebefore = number_format($Balance_id['Balance'], 0);
@@ -1309,6 +1318,13 @@ $textonebuy
                 'parse_mode' => "HTML",
                 'reply_markup' => $Response
             ]);
+            if (function_exists('cubepay_log')) cubepay_log('DP: channel report sent');
+            try {
+                $pdo->prepare(
+                    "UPDATE Payment_report SET dec_not_confirmed = CONCAT(COALESCE(dec_not_confirmed,''), ' [report-done]')
+                     WHERE id_order = ? AND (dec_not_confirmed IS NULL OR dec_not_confirmed NOT LIKE '%[report-done]%')"
+                )->execute([$order_id]);
+            } catch (Throwable $__re) { /* بازیابی جبران می‌کند */ }
         }
         if (intval($setting['scorestatus']) == 1 and !in_array($Balance_id['id'], $admin_ids)) {
             sendmessage($Balance_id['id'], "📌شما 1 امتیاز جدید کسب کردید.", null, 'html');
@@ -1330,12 +1346,12 @@ $textonebuy
 ✍️ توضیحات : {$paymentNote}
 
 ";
-            // [FIX] پیام دوتایی هنگام تایید رسید.
-            // وقتی ادمین رسیدِ عکسی را تایید می‌کند، Editmessagetext آن پیام عکس را
-            // حذف و یک پیام متنی تازه می‌فرستد. هندلر تاییدِ ادمین هم بعد از برگشتن
-            // از این تابع دوباره همین کار را می‌کند — نتیجه دو پیام جدا با اطلاعات
-            // متفاوت. اگر فراخوان اعلام کرده باشد که خودش پیام نهایی را می‌سازد،
-            // اینجا فقط متن را تحویلش می‌دهیم تا یک پیامِ واحد ساخته شود.
+            // [FIX پیام دوتایی] وقتی ادمین رسید را تایید می‌کند، Editmessagetext
+            // اینجا یک پیامِ تایید می‌سازد و هندلرِ تاییدِ ادمین (Confirm_pay_) هم
+            // بعد از برگشت از این تابع دوباره یک پیامِ تایید می‌سازد — نتیجه دو
+            // پیامِ جدا با اطلاعاتِ متفاوت (چه از ربات چه از دکمه‌ی رسیدِ مینی‌اپ).
+            // اگر فراخوان اعلام کرده باشد که خودش پیامِ نهایی را می‌سازد، اینجا فقط
+            // متن را تحویلش می‌دهیم تا در «یک» پیامِ واحد ادغام شود.
             if (!empty($GLOBALS['rx_admin_confirm_merge'])) {
                 $GLOBALS['rx_dp_admin_confirm_text'] = $textconfrom;
             } else {
@@ -1356,11 +1372,17 @@ $textonebuy
         $service_other = $data_order;
         if ($service_other == false) {
             sendmessage($Balance_id['id'], '❌ خطایی در هنگام تمدید رخ داده با پشتیبانی در ارتباط باشید', $keyboard, 'HTML');
-            return;
+            return false;
         }
         $service_other = json_decode($service_other['value'], true);
         $codeproduct = $service_other['code_product'];
-        $nameloc = select("invoice", "*", "username", $usernamepanel, "select");
+        // Scoped to the payer, for the same reason as the bot's own copy of
+        // this flow: the row decides which panel prices the extension.
+        $nameloc = rx_invoice_for_user((string) $usernamepanel, $Balance_id['id']) ?: false;
+        if (!is_array($nameloc)) {
+            sendmessage($Balance_id['id'], '❌ سرویس این تمدید پیدا نشد؛ با پشتیبانی در ارتباط باشید.', null, 'HTML');
+            return false;
+        }
         $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
         if ($codeproduct == "custom_volume") {
             $prodcut['code_product'] = "custom_volume";
@@ -1378,15 +1400,26 @@ $textonebuy
             update("invoice", "price_product", $prodcut['price_product'], "id_invoice", $nameloc['id_invoice']);
         }
         if (function_exists('nmStopIfServicePanelBlocked') && nmStopIfServicePanelBlocked($nameloc, $Balance_id['id'], $keyboard)) {
+            // [FIX بازگشتِ وجهِ اتمیک] عددِ کهنه‌ی موجودی بازنویسی می‌شد و هر
+            // شارژ/هدیه‌ای که هم‌زمان می‌رسید از بین می‌رفت.
+            balance_atomic_credit($Balance_id['id'], (float) ($Payment_report['price'] ?? 0));
             $balance = (float)($Balance_id['Balance'] ?? 0) + (float)($Payment_report['price'] ?? 0);
-            update("user", "Balance", $balance, "id", $Balance_id['id']);
             sendmessage($Balance_id['id'], "💎 مبلغ پرداختی به دلیل فعال بودن وضعیت اینترنت ملی/پنل اضطراری به کیف پول شما برگشت خورد.", $keyboard, 'HTML');
-            return;
+            return false;
         }
         $dateacc = date('Y/m/d H:i:s');
         $DataUserOut = $ManagePanel->DataUser($nameloc['Service_location'], $nameloc['username']);
-        $Balance_Low_user = 0;
-        update("user", "Balance", $Balance_Low_user, "id", $Balance_id['id']);
+        // [FIX نابودیِ کیف پول هنگام تمدید]
+        // قبلاً اینجا موجودی با عددِ ثابتِ صفر بازنویسی می‌شد. منطقِ پشتش این بود
+        // که «این شاخه فقط وقتی اجرا می‌شود که کیف پول کفافِ قیمت را نداده، پس
+        // همه‌اش خرج شده». اما این صفر در لحظه‌ی «تاییدِ پرداخت» نوشته می‌شد، نه
+        // لحظه‌ی صدور فاکتور — و بینشان ساعت‌ها فاصله است. هر شارژی که مشتری در
+        // این فاصله انجام می‌داد، لحظه‌ی تاییدِ تو کاملاً از بین می‌رفت.
+        // سهمِ واقعیِ کیف پول = قیمت محصول منهای چیزی که از درگاه پرداخت شده.
+        $__walletShareExtend = (float) ($prodcut['price_product'] ?? 0) - (float) ($Payment_report['price'] ?? 0);
+        if ($__walletShareExtend > 0) {
+            balance_atomic_deduct($Balance_id['id'], $__walletShareExtend);
+        }
         $extend = $ManagePanel->extend($marzban_list_get['Methodextend'], $prodcut['Volume_constraint'], $prodcut['Service_time'], $nameloc['username'], $prodcut['code_product'], $marzban_list_get['code_panel']);
         if ($extend['status'] == false && function_exists('nmPanelEmergencyPanel')) {
             $emergencyPanel = nmPanelEmergencyPanel($marzban_list_get);
@@ -1405,10 +1438,12 @@ $textonebuy
                 update("service_other", "output", json_encode(['status' => true, 'source' => 'nm_stock', 'stock_id' => $fallbackStock['id'], 'tier' => $fallbackStock['tier']], JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES), "id", $data_order['id']);
                 update("service_other", "status", "paid", "id", $data_order['id']);
                 sendmessage($Balance_id['id'], "✅ پنل اصلی در دسترس نبود؛ تمدید شما با کانفیگ جایگزین از انبار شبکه‌ملی تکمیل شد.", $keyboard, 'HTML');
-                return;
+                return true;
             }
-            $balance = $Balance_id['Balance'] + $Payment_report['price'];
-            update("user", "Balance", $balance, "id", $Balance_id['id']);
+            // [FIX بازگشتِ وجهِ اتمیک] عددِ کهنه‌ی موجودی بازنویسی می‌شد و هر
+            // شارژ/هدیه‌ای که هم‌زمان می‌رسید از بین می‌رفت.
+            balance_atomic_credit($Balance_id['id'], (float) ($Payment_report['price'] ?? 0));
+            $balance = (float) $Balance_id['Balance'] + (float) $Payment_report['price'];
             sendmessage($Balance_id['id'], $textbotlang['users']['sell']['ErrorConfig'], $keyboard, 'HTML');
             sendmessage($Balance_id['id'], "💎  کاربر عزیز بدلیل تمدید نشدن سرویس مبلغ $balance تومان به کیف پول شما اضافه گردید.", $keyboard, 'HTML');
             $extend['msg'] = json_encode($extend['msg']);
@@ -1426,7 +1461,7 @@ $textonebuy
                     'parse_mode' => "HTML"
                 ]);
             }
-            return;
+            return false;
         }
 
         update("service_other", "output", json_encode($extend), "id", $data_order['id']);
@@ -1466,8 +1501,14 @@ $textonebuy
         }
         if (intval($valurcashbackextend) != 0) {
             $result = ($prodcut['price_product'] * $valurcashbackextend) / 100;
-            $pricelastextend = $result;
-            update("user", "Balance", $pricelastextend, "id", $Balance_id['id']);
+            // [FIX نابودیِ موجودی هنگام کش‌بکِ تمدید]
+            // این یک «انتساب» بود نه «افزایش»: موجودی کاربر برابرِ خودِ مبلغِ
+            // کش‌بک نوشته می‌شد. مشتری با ۲۰۰٬۰۰۰ تومان موجودی، پس از گرفتنِ
+            // ۵٬۰۰۰ تومان هدیه‌ی تمدید، فقط ۵٬۰۰۰ تومان برایش می‌ماند — در حالی
+            // که پیامِ خطِ بعد می‌گوید «حساب شما شارژ گردید».
+            // balance_atomic_credit افزایشِ اتمیک انجام می‌دهد، پس شارژ/هدیه‌ای
+            // که هم‌زمان برسد هم از بین نمی‌رود.
+            balance_atomic_credit($Balance_id['id'], (float) $result);
             sendmessage($Balance_id['id'], "تبریک 🎉
 📌 به عنوان هدیه تمدید مبلغ $result تومان حساب شما شارژ گردید", null, 'HTML');
         }
@@ -1521,12 +1562,12 @@ $textonebuy
 ✍️ توضیحات : {$paymentNote}
 
 ";
-            // [FIX] پیام دوتایی هنگام تایید رسید.
-            // وقتی ادمین رسیدِ عکسی را تایید می‌کند، Editmessagetext آن پیام عکس را
-            // حذف و یک پیام متنی تازه می‌فرستد. هندلر تاییدِ ادمین هم بعد از برگشتن
-            // از این تابع دوباره همین کار را می‌کند — نتیجه دو پیام جدا با اطلاعات
-            // متفاوت. اگر فراخوان اعلام کرده باشد که خودش پیام نهایی را می‌سازد،
-            // اینجا فقط متن را تحویلش می‌دهیم تا یک پیامِ واحد ساخته شود.
+            // [FIX پیام دوتایی] وقتی ادمین رسید را تایید می‌کند، Editmessagetext
+            // اینجا یک پیامِ تایید می‌سازد و هندلرِ تاییدِ ادمین (Confirm_pay_) هم
+            // بعد از برگشت از این تابع دوباره یک پیامِ تایید می‌سازد — نتیجه دو
+            // پیامِ جدا با اطلاعاتِ متفاوت (چه از ربات چه از دکمه‌ی رسیدِ مینی‌اپ).
+            // اگر فراخوان اعلام کرده باشد که خودش پیامِ نهایی را می‌سازد، اینجا فقط
+            // متن را تحویلش می‌دهیم تا در «یک» پیامِ واحد ادغام شود.
             if (!empty($GLOBALS['rx_admin_confirm_merge'])) {
                 $GLOBALS['rx_dp_admin_confirm_text'] = $textconfrom;
             } else {
@@ -1536,20 +1577,41 @@ $textonebuy
     } elseif ($steppay[0] == "getextravolumeuser") {
         $steppay = explode("%", $steppay[1]);
         $volume = $steppay[1];
-        $nameloc = select("invoice", "*", "username", $steppay[0], "select");
+        // Scoped to the payer, for the same reason as the bot's own copy of
+        // this flow: the row decides which panel prices the extension.
+        $nameloc = rx_invoice_for_user((string) $steppay[0], $Balance_id['id']) ?: false;
+        if (!is_array($nameloc)) {
+            sendmessage($Balance_id['id'], '❌ سرویس این تمدید پیدا نشد؛ با پشتیبانی در ارتباط باشید.', null, 'HTML');
+            return false;
+        }
         $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
-        $Balance_Low_user = 0;
+        // [FIX نابودیِ کیف پول هنگام خرید حجم اضافه]
+        // قیمتِ کلِ این سفارش مستقیماً ذخیره نشده، پس از جدولِ قیمتِ حجمِ اضافه‌ی
+        // همین پنل و تخفیفِ کاربر بازسازی‌اش می‌کنیم تا فقط «سهمِ واقعیِ کیف پول»
+        // کم شود، نه کلِ موجودی. اگر بازسازی ممکن نبود، تابع کمکی دقیقاً مثل قبل
+        // کلِ موجودی را برمی‌گرداند تا رفتار قدیمی حفظ شود.
+        $__xvRebuilt = null;
+        $__xvPrices  = json_decode((string) ($marzban_list_get['priceextravolume'] ?? ''), true);
+        $__xvPerGig  = is_array($__xvPrices) ? (float) ($__xvPrices[$Balance_id['agent']] ?? 0) : 0.0;
+        if ($__xvPerGig > 0) {
+            $__xvTotal = (float) $volume * $__xvPerGig;
+            $__xvDisc  = (int) ($Balance_id['pricediscount'] ?? 0);
+            if ($__xvDisc != 0) {
+                $__xvTotal -= ($__xvTotal * $__xvDisc) / 100;
+            }
+            $__xvRebuilt = $__xvTotal - (float) ($Payment_report['price'] ?? 0);
+        }
+        $__xvWalletTake = rx_wallet_share_paid($steppay[2] ?? null, $__xvRebuilt, $Balance_id['Balance'] ?? 0);
         $inboundid = $marzban_list_get['inboundid'];
         if ($nameloc['inboundid'] != null) {
             $inboundid = $nameloc['inboundid'];
         }
         if (function_exists('nmStopIfServicePanelBlocked') && nmStopIfServicePanelBlocked($nameloc, $Balance_id['id'], $keyboard)) {
-            $balance = (float)($Balance_id['Balance'] ?? 0) + (float)($Payment_report['price'] ?? 0);
-            update("user", "Balance", $balance, "id", $Balance_id['id']);
+            balance_atomic_credit($Balance_id['id'], (float) ($Payment_report['price'] ?? 0));
             sendmessage($Balance_id['id'], "💎 مبلغ پرداختی به دلیل فعال بودن وضعیت اینترنت ملی/پنل اضطراری به کیف پول شما برگشت خورد.", $keyboard, 'HTML');
-            return;
+            return false;
         }
-        update("user", "Balance", $Balance_Low_user, "id", $Balance_id['id']);
+        balance_atomic_deduct($Balance_id['id'], $__xvWalletTake);
         $DataUserOut = $ManagePanel->DataUser($nameloc['Service_location'], $steppay[0]);
         $data_for_database = json_encode(array(
             'volume_value' => $volume,
@@ -1560,12 +1622,19 @@ $textonebuy
         $type = "extra_user";
         $extra_volume = $ManagePanel->extra_volume($nameloc['username'], $marzban_list_get['code_panel'], $volume);
         if ($extra_volume['status'] == false) {
+            // [FIX نبودِ بازگشتِ وجه] شاخه‌ی تمدیدِ عادی بازگشتِ وجه دارد، ولی این
+            // شاخه فقط خطا را گزارش می‌کرد و برمی‌گشت — یعنی مشتری هم پولِ درگاه را
+            // داده بود، هم سهمِ کیف پولش کسر شده بود، و هیچ چیزی نگرفته بود.
+            balance_atomic_credit($Balance_id['id'], (float) ($Payment_report['price'] ?? 0));
+            if (!empty($__xvWalletTake)) {
+                balance_atomic_credit($Balance_id['id'], (float) $__xvWalletTake);
+            }
             $extra_volume['msg'] = json_encode($extra_volume['msg']);
             $textreports = "خطای خرید حجم اضافه
 نام پنل : {$marzban_list_get['name_panel']}
 نام کاربری سرویس : {$nameloc['username']}
 دلیل خطا : {$extra_volume['msg']}";
-            sendmessage($nameloc['id_user'], "❌خطایی در خرید حجم اضافه سرویس رخ داده با پشتیبانی در ارتباط باشید", null, 'HTML');
+            sendmessage($nameloc['id_user'], "❌ خطایی در خرید حجم اضافه رخ داد. کلِ مبلغ پرداختی به کیف پول شما برگشت داده شد. در صورت نیاز با پشتیبانی در ارتباط باشید.", null, 'HTML');
             if (strlen($setting['Channel_Report']) > 0) {
                 telegram('sendmessage', [
                     'chat_id' => $setting['Channel_Report'],
@@ -1574,7 +1643,7 @@ $textonebuy
                     'parse_mode' => "HTML"
                 ]);
             }
-            return;
+            return false;
         }
         $stmt = $pdo->prepare("INSERT IGNORE INTO service_other (id_user, username,value,type,time,price,output) VALUES (:id_user,:username,:value,:type,:time,:price,:output)");
         $stmt->bindParam(':id_user', $Balance_id['id']);
@@ -1617,12 +1686,12 @@ $textonebuy
 💎 موجودی قبل ازافزایش موجودی : {$Balance_id['Balance']}
 💸 مبلغ پرداختی: $format_price_cart تومان
 ";
-            // [FIX] پیام دوتایی هنگام تایید رسید.
-            // وقتی ادمین رسیدِ عکسی را تایید می‌کند، Editmessagetext آن پیام عکس را
-            // حذف و یک پیام متنی تازه می‌فرستد. هندلر تاییدِ ادمین هم بعد از برگشتن
-            // از این تابع دوباره همین کار را می‌کند — نتیجه دو پیام جدا با اطلاعات
-            // متفاوت. اگر فراخوان اعلام کرده باشد که خودش پیام نهایی را می‌سازد،
-            // اینجا فقط متن را تحویلش می‌دهیم تا یک پیامِ واحد ساخته شود.
+            // [FIX پیام دوتایی] وقتی ادمین رسید را تایید می‌کند، Editmessagetext
+            // اینجا یک پیامِ تایید می‌سازد و هندلرِ تاییدِ ادمین (Confirm_pay_) هم
+            // بعد از برگشت از این تابع دوباره یک پیامِ تایید می‌سازد — نتیجه دو
+            // پیامِ جدا با اطلاعاتِ متفاوت (چه از ربات چه از دکمه‌ی رسیدِ مینی‌اپ).
+            // اگر فراخوان اعلام کرده باشد که خودش پیامِ نهایی را می‌سازد، اینجا فقط
+            // متن را تحویلش می‌دهیم تا در «یک» پیامِ واحد ادغام شود.
             if (!empty($GLOBALS['rx_admin_confirm_merge'])) {
                 $GLOBALS['rx_dp_admin_confirm_text'] = $textconfrom;
             } else {
@@ -1650,20 +1719,40 @@ $textonebuy
     } elseif ($steppay[0] == "getextratimeuser") {
         $steppay = explode("%", $steppay[1]);
         $tmieextra = $steppay[1];
-        $nameloc = select("invoice", "*", "username", $steppay[0], "select");
+        // Scoped to the payer, for the same reason as the bot's own copy of
+        // this flow: the row decides which panel prices the extension.
+        $nameloc = rx_invoice_for_user((string) $steppay[0], $Balance_id['id']) ?: false;
+        if (!is_array($nameloc)) {
+            sendmessage($Balance_id['id'], '❌ سرویس این تمدید پیدا نشد؛ با پشتیبانی در ارتباط باشید.', null, 'HTML');
+            return false;
+        }
         $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
-        $Balance_Low_user = 0;
+        // [FIX نابودیِ کیف پول هنگام خرید زمان اضافه] — دقیقاً مثل شاخه‌ی حجمِ
+        // اضافه. ضمناً کسر قبلاً روی `$nameloc['id_user']` انجام می‌شد (صاحبِ
+        // فاکتور) نه پرداخت‌کننده؛ حالا که فاکتور به خودِ پرداخت‌کننده محدود شده
+        // این دو یکی‌اند، ولی صریحاً از شناسه‌ی پرداخت‌کننده استفاده می‌کنیم.
+        $__xtRebuilt = null;
+        $__xtPrices  = json_decode((string) ($marzban_list_get['priceextratime'] ?? ''), true);
+        $__xtPerDay  = is_array($__xtPrices) ? (float) ($__xtPrices[$Balance_id['agent']] ?? 0) : 0.0;
+        if ($__xtPerDay > 0) {
+            $__xtTotal = (float) $tmieextra * $__xtPerDay;
+            $__xtDisc  = (int) ($Balance_id['pricediscount'] ?? 0);
+            if ($__xtDisc != 0) {
+                $__xtTotal -= ($__xtTotal * $__xtDisc) / 100;
+            }
+            $__xtRebuilt = $__xtTotal - (float) ($Payment_report['price'] ?? 0);
+        }
+        $__xtWalletTake = rx_wallet_share_paid($steppay[2] ?? null, $__xtRebuilt, $Balance_id['Balance'] ?? 0);
         $inboundid = $marzban_list_get['inboundid'];
         if ($nameloc['inboundid'] != false) {
             $inboundid = $nameloc['inboundid'];
         }
         if (function_exists('nmStopIfServicePanelBlocked') && nmStopIfServicePanelBlocked($nameloc, $Balance_id['id'], $keyboard)) {
-            $balance = (float)($Balance_id['Balance'] ?? 0) + (float)($Payment_report['price'] ?? 0);
-            update("user", "Balance", $balance, "id", $Balance_id['id']);
+            balance_atomic_credit($Balance_id['id'], (float) ($Payment_report['price'] ?? 0));
             sendmessage($Balance_id['id'], "💎 مبلغ پرداختی به دلیل فعال بودن وضعیت اینترنت ملی/پنل اضطراری به کیف پول شما برگشت خورد.", $keyboard, 'HTML');
-            return;
+            return false;
         }
-        update("user", "Balance", $Balance_Low_user, "id", $nameloc['id_user']);
+        balance_atomic_deduct($Balance_id['id'], $__xtWalletTake);
         $DataUserOut = $ManagePanel->DataUser($nameloc['Service_location'], $steppay[0]);
         $data_for_database = json_encode(array(
             'day' => $tmieextra,
@@ -1676,12 +1765,18 @@ $textonebuy
         $day = floor($timeservice / 86400);
         $extra_time = $ManagePanel->extra_time($nameloc['username'], $marzban_list_get['code_panel'], $tmieextra);
         if ($extra_time['status'] == false) {
+            // [FIX نبودِ بازگشتِ وجه] — مثل شاخه‌ی حجمِ اضافه؛ قبلاً مشتری هم پول
+            // درگاه را داده بود، هم سهمِ کیف پولش کسر شده بود، و هیچ نمی‌گرفت.
+            balance_atomic_credit($Balance_id['id'], (float) ($Payment_report['price'] ?? 0));
+            if (!empty($__xtWalletTake)) {
+                balance_atomic_credit($Balance_id['id'], (float) $__xtWalletTake);
+            }
             $extra_time['msg'] = json_encode($extra_time['msg']);
-            $textreports = "خطای خرید حجم اضافه
+            $textreports = "خطای خرید زمان اضافه
 نام پنل : {$marzban_list_get['name_panel']}
 نام کاربری سرویس : {$nameloc['username']}
 دلیل خطا : {$extra_time['msg']}";
-            sendmessage($from_id, "❌خطایی در خرید حجم اضافه سرویس رخ داده با پشتیبانی در ارتباط باشید", null, 'HTML');
+            sendmessage($Balance_id['id'], "❌ خطایی در خرید زمان اضافه رخ داد. کلِ مبلغ پرداختی به کیف پول شما برگشت داده شد. در صورت نیاز با پشتیبانی در ارتباط باشید.", null, 'HTML');
             if (strlen($setting['Channel_Report']) > 0) {
                 telegram('sendmessage', [
                     'chat_id' => $setting['Channel_Report'],
@@ -1690,7 +1785,7 @@ $textonebuy
                     'parse_mode' => "HTML"
                 ]);
             }
-            return;
+            return false;
         }
         $stmt = $pdo->prepare("INSERT IGNORE INTO service_other (id_user, username,value,type,time,price,output) VALUES (:id_user,:username,:value,:type,:time,:price,:output)");
         $stmt->bindParam(':id_user', $Balance_id['id']);
@@ -1733,12 +1828,12 @@ $textonebuy
 💎 موجودی قبل ازافزایش موجودی : {$Balance_id['Balance']}
 💸 مبلغ پرداختی: $format_price_cart تومان
 ";
-            // [FIX] پیام دوتایی هنگام تایید رسید.
-            // وقتی ادمین رسیدِ عکسی را تایید می‌کند، Editmessagetext آن پیام عکس را
-            // حذف و یک پیام متنی تازه می‌فرستد. هندلر تاییدِ ادمین هم بعد از برگشتن
-            // از این تابع دوباره همین کار را می‌کند — نتیجه دو پیام جدا با اطلاعات
-            // متفاوت. اگر فراخوان اعلام کرده باشد که خودش پیام نهایی را می‌سازد،
-            // اینجا فقط متن را تحویلش می‌دهیم تا یک پیامِ واحد ساخته شود.
+            // [FIX پیام دوتایی] وقتی ادمین رسید را تایید می‌کند، Editmessagetext
+            // اینجا یک پیامِ تایید می‌سازد و هندلرِ تاییدِ ادمین (Confirm_pay_) هم
+            // بعد از برگشت از این تابع دوباره یک پیامِ تایید می‌سازد — نتیجه دو
+            // پیامِ جدا با اطلاعاتِ متفاوت (چه از ربات چه از دکمه‌ی رسیدِ مینی‌اپ).
+            // اگر فراخوان اعلام کرده باشد که خودش پیامِ نهایی را می‌سازد، اینجا فقط
+            // متن را تحویلش می‌دهیم تا در «یک» پیامِ واحد ادغام شود.
             if (!empty($GLOBALS['rx_admin_confirm_merge'])) {
                 $GLOBALS['rx_dp_admin_confirm_text'] = $textconfrom;
             } else {
@@ -1764,8 +1859,14 @@ $textonebuy
         $__chargeBonus = isset($Payment_report['charge_bonus']) ? intval($Payment_report['charge_bonus']) : 0;
         $__paidAmount = intval($Payment_report['price']);
         $__creditAmount = $__paidAmount + $__chargeBonus;
+        // [FIX از‌دست‌رفتنِ شارژِ هم‌زمان] این پرکاربردترین مسیرِ پولیِ ربات است.
+        // موجودی یک‌بار در ابتدای DirectPayment خوانده می‌شد و بعد از چندین تماسِ
+        // شبکه‌ای و پیامِ تلگرام، مقدارِ کهنه + مبلغ دوباره نوشته می‌شد. اگر دو رسید
+        // نزدیک به هم تایید می‌شد (تاییدِ پشت‌سرهمِ صف توسط ادمین، یا کرونِ رمزارز
+        // هم‌زمان با وب‌هوک)، فقط یکی از آن‌ها اعمال می‌شد و شارژِ دیگری بی‌صدا
+        // گم می‌شد. افزایشِ اتمیک این مشکل را از بین می‌برد.
+        balance_atomic_credit($Payment_report['id_user'], (float) $__creditAmount);
         $Balance_confrim = intval($Balance_id['Balance']) + $__creditAmount;
-        update("user", "Balance", $Balance_confrim, "id", $Payment_report['id_user']);
         update("Payment_report", "payment_Status", "paid", "id_order", $Payment_report['id_order']);
         update("user", "Processing_value_four", "", "id", $Payment_report['id_user']);
         $format_price_cart = number_format($__paidAmount, 0);
@@ -1778,12 +1879,12 @@ $textonebuy
 💸 مبلغ پرداختی: $format_price_cart تومان
 💎 موجودی قبل ازافزایش موجودی : {$Balance_id['Balance']}
 ✍️ توضیحات : {$paymentNote}";
-            // [FIX] پیام دوتایی هنگام تایید رسید.
-            // وقتی ادمین رسیدِ عکسی را تایید می‌کند، Editmessagetext آن پیام عکس را
-            // حذف و یک پیام متنی تازه می‌فرستد. هندلر تاییدِ ادمین هم بعد از برگشتن
-            // از این تابع دوباره همین کار را می‌کند — نتیجه دو پیام جدا با اطلاعات
-            // متفاوت. اگر فراخوان اعلام کرده باشد که خودش پیام نهایی را می‌سازد،
-            // اینجا فقط متن را تحویلش می‌دهیم تا یک پیامِ واحد ساخته شود.
+            // [FIX پیام دوتایی] وقتی ادمین رسید را تایید می‌کند، Editmessagetext
+            // اینجا یک پیامِ تایید می‌سازد و هندلرِ تاییدِ ادمین (Confirm_pay_) هم
+            // بعد از برگشت از این تابع دوباره یک پیامِ تایید می‌سازد — نتیجه دو
+            // پیامِ جدا با اطلاعاتِ متفاوت (چه از ربات چه از دکمه‌ی رسیدِ مینی‌اپ).
+            // اگر فراخوان اعلام کرده باشد که خودش پیامِ نهایی را می‌سازد، اینجا فقط
+            // متن را تحویلش می‌دهیم تا در «یک» پیامِ واحد ادغام شود.
             if (!empty($GLOBALS['rx_admin_confirm_merge'])) {
                 $GLOBALS['rx_dp_admin_confirm_text'] = $textconfrom;
             } else {
@@ -1794,5 +1895,96 @@ $textonebuy
         sendmessage($Payment_report['id_user'], "💎 کاربر گرامی مبلغ {$__creditFmt} تومان به کیف پول شما واریز گردید با تشکراز پرداخت شما.
                 
 🛒 کد پیگیری شما: {$Payment_report['id_order']}", null, 'HTML');
+    }
+
+    // [FIX] DirectPayment قبلاً هیچ‌وقت مقداری برنمی‌گرداند (همیشه null).
+    // اما nm_safe_direct_payment() شرطِ سخت‌گیرانه‌ی `$result === false` را چک
+    // می‌کند تا شکستِ تحویل را به ادمین گزارش بدهد — و چون null هرگز === false
+    // نیست، آن گارد عملاً همیشه خاموش بود: وقتی ساختِ سرویس شکست می‌خورد و پول
+    // برگشت داده می‌شد، پنلِ ادمین باز هم «موفق» نشان می‌داد و حتی کش‌بکِ کارت
+    // هم پرداخت می‌شد. حالا مسیرهای شکست false و رسیدن به انتها true می‌دهد.
+    return true;
+}
+
+/**
+ * The invoice with this service username that belongs to this customer.
+ *
+ * Service usernames are not unique across a shop — the duplicate check runs
+ * against one panel, and with «نام کاربری دلخواه» the customer picks the name
+ * themselves — so `select("invoice", "*", "username", $u, "select")` returns
+ * whichever row MySQL reaches first, which may be somebody else's.
+ *
+ * Two different bugs came out of that, depending on whether the caller
+ * bothered to check afterwards:
+ *
+ *   No check — the receipt an admin is asked to confirm showed another
+ *   customer's product, volume and duration.
+ *
+ *   Checked after the fact — the query found the stranger's row, the ownership
+ *   test then failed, and the actual owner was told their service does not
+ *   exist. Safe, and still broken for the person who paid.
+ *
+ * Scoping the query fixes both: the owner always finds theirs, and nobody
+ * finds anybody else's.
+ */
+if (!function_exists('rx_invoice_for_user')) {
+    function rx_invoice_for_user(string $username, $userId): ?array
+    {
+        $pdo = $GLOBALS['pdo'] ?? null;
+        if (!($pdo instanceof PDO) || trim($username) === '' || (string) $userId === '') {
+            return null;
+        }
+        try {
+            $stmt = $pdo->prepare(
+                'SELECT * FROM invoice
+                  WHERE username = :u AND id_user = :uid
+               ORDER BY time_sell DESC LIMIT 1'
+            );
+            $stmt->execute([':u' => $username, ':uid' => (string) $userId]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            return is_array($row) ? $row : null;
+        } catch (Throwable $e) {
+            error_log('[rx_invoice_for_user] ' . $e->getMessage());
+            return null;
+        }
+    }
+}
+
+/**
+ * The invoice for this service username **on this panel**.
+ *
+ * The panel-level twin of rx_invoice_for_user(). A panel function does not
+ * know which customer is asking — the username is its only handle — but a
+ * username is unique within one panel, because the panel enforces it. It is
+ * not unique across a shop, and that is the whole difference.
+ *
+ * It matters here more than anywhere else: the row this returns supplies
+ * `id_invoice`, which becomes the customer's /sub/<id> URL, and that id is the
+ * only thing protecting their configs. Unscoped, one customer could be handed
+ * another's subscription secret — full access to their configs, not merely the
+ * wrong screen.
+ *
+ * @return array|false The row, or false, matching what the call sites test.
+ */
+if (!function_exists('rx_invoice_on_panel')) {
+    function rx_invoice_on_panel(string $username, string $panelName)
+    {
+        $pdo = $GLOBALS['pdo'] ?? null;
+        if (!($pdo instanceof PDO) || trim($username) === '' || trim($panelName) === '') {
+            return false;
+        }
+        try {
+            $stmt = $pdo->prepare(
+                'SELECT * FROM invoice
+                  WHERE username = :u AND Service_location = :p
+               ORDER BY time_sell DESC LIMIT 1'
+            );
+            $stmt->execute([':u' => $username, ':p' => $panelName]);
+            $row = $stmt->fetch(PDO::FETCH_ASSOC);
+            return is_array($row) ? $row : false;
+        } catch (Throwable $e) {
+            error_log('[rx_invoice_on_panel] ' . $e->getMessage());
+            return false;
+        }
     }
 }

@@ -114,7 +114,13 @@ while (!empty($userid) && $processed < $batchSize) {
 
     $hadPersistentError = false;
 
-    $invoce = select("invoice", "*", "username", $iduser->username, "select");
+    // Scoped to the panel this gift run is walking. The username came from
+    // that panel's own user list, and the row found here decides both who is
+    // credited ($invoce['id_user']) and which service is topped up — so an
+    // unscoped match sends one customer's gift to another customer entirely.
+    $invoce = function_exists('rx_invoice_on_panel')
+        ? rx_invoice_on_panel((string) $iduser->username, (string) $info['name_panel'])
+        : select("invoice", "*", "username", $iduser->username, "select");
     if (!is_array($invoce) || !isset($invoce['id_user']) || empty($invoce['id_user'])) {
         $logFailedUser($iduser->username);
         continue;
@@ -127,7 +133,7 @@ while (!empty($userid) && $processed < $batchSize) {
             $hadPersistentError = true;
             $extra_volume['msg'] = json_encode($extra_volume['msg']);
             $textreports = "خطای اضافه شدن هدیه حجم\nنام پنل : {$marzban_list_get['name_panel']}\nنام کاربری سرویس : {$iduser->username}\nدلیل خطا : {$extra_volume['msg']}";
-            if (strlen($setting['Channel_Report']) > 0) {
+            if (reportChannelIsSet($setting)) {
                 telegram('sendmessage', [
                     'chat_id' => $setting['Channel_Report'],
                     'message_thread_id' => $errorreport,
@@ -164,7 +170,7 @@ while (!empty($userid) && $processed < $batchSize) {
             $hadPersistentError = true;
             $extra_time['msg'] = json_encode($extra_time['msg']);
             $textreports = "خطای اضافه شدن هدیه حجم\nنام پنل : {$marzban_list_get['name_panel']}\nنام کاربری سرویس : {$iduser->username}\nدلیل خطا : {$extra_time['msg']}";
-            if (strlen($setting['Channel_Report']) > 0) {
+            if (reportChannelIsSet($setting)) {
                 telegram('sendmessage', [
                     'chat_id' => $setting['Channel_Report'],
                     'message_thread_id' => $errorreport,

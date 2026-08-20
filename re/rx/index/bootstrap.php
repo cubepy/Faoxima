@@ -1878,10 +1878,12 @@ $textconnect
 } elseif (preg_match('/subscriptionurl_(\w+)/', $datain, $dataget) || (is_string($text) && strpos($text, "/sub ") !== false)) {
     if (is_string($text) && $text !== '' && $text[0] == "/") {
         $id_invoice = explode(' ', $text)[1];
-        $nameloc = select("invoice", "*", "username", $id_invoice, "select");
-        if ($nameloc['id_user'] != $from_id) {
-            $nameloc = false;
-        }
+        // Scoped in the query rather than checked afterwards. The old shape
+        // found whichever row matched the username first — which, when two
+        // customers on two panels chose the same name, was the stranger's.
+        // The check below then failed and the person who actually owns the
+        // service was told it does not exist.
+        $nameloc = rx_invoice_for_user((string) $id_invoice, $from_id) ?: false;
     } else {
         $id_invoice = $dataget[1];
         $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");
@@ -2003,10 +2005,12 @@ $textconnect
             sendmessage($from_id, $textbotlang['users']['stateus']['UserNotFound'], null, 'html');
             return;
         }
-        $nameloc = select("invoice", "*", "username", $id_invoice, "select");
-        if ($nameloc['id_user'] != $from_id) {
-            $nameloc = false;
-        }
+        // Scoped in the query rather than checked afterwards. The old shape
+        // found whichever row matched the username first — which, when two
+        // customers on two panels chose the same name, was the stranger's.
+        // The check below then failed and the person who actually owns the
+        // service was told it does not exist.
+        $nameloc = rx_invoice_for_user((string) $id_invoice, $from_id) ?: false;
     } else {
         $id_invoice = $dataget[1];
         $nameloc = select("invoice", "*", "id_invoice", $id_invoice, "select");

@@ -18,6 +18,9 @@ final class PendingPaymentsHandler extends BaseHandler
         }
 
         try {
+            // [FIX 8] قید source = 'miniapp' حذف شد؛ مالکیت با id_user تضمین شده و این
+            // قید فقط پرداخت‌های در جریانی را که از داخل ربات باز شده بودند از لیست
+            // «در انتظار پرداخت» حذف می‌کرد، در حالی که پول واریز شده بود.
             $rows = FaoximaDb::fetchAll(
                 "SELECT id, id_order, time, price, payment_Status, Payment_Method,
                         dec_not_confirmed, crypto_currency, crypto_tx_hash
@@ -25,7 +28,6 @@ final class PendingPaymentsHandler extends BaseHandler
                   WHERE id_user = :u
                     AND payment_Status IN ('Unpaid','waiting','AwaitingHash','pending')
                     AND Payment_Method IN ('plisio','nowpayment','digitaltron','arze digital offline','cart to cart','carttocart_pv','iranpay1')
-                    AND source = 'miniapp'
                   ORDER BY id DESC
                   LIMIT 8",
                 [':u' => $userId]

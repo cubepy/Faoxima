@@ -12,10 +12,53 @@ final class ServiceRenewConfirmHandler extends BaseHandler
     {
         $this->requireMethod('POST');
 
+        // Slow remote panels (Guard/erfjab in particular needs 2-3 sequential
+        // HTTP calls) can otherwise exceed the host's default execution-time
+        // limit and get killed before we ever reach the admin notification below.
+        @set_time_limit(90);
+
+        $__reported = false;
+        $__orderMeta = [
+            'user_id'  => (int)($this->user['id'] ?? 0),
+            'username' => null,
+            'panel'    => null,
+            'product'  => null,
+        ];
+        register_shutdown_function(function () use (&$__reported, &$__orderMeta) {
+            if ($__reported) return;
+            $err = error_get_last();
+            if (!$err || !in_array($err['type'], [E_ERROR, E_PARSE, E_CORE_ERROR, E_COMPILE_ERROR], true)) {
+                return;
+            }
+            try {
+                $settingRow = function_exists('select') ? select('setting', '*') : null;
+                $channel = is_array($settingRow) ? (string)($settingRow['Channel_Report'] ?? '') : '';
+                if ($channel === '') return;
+                $topicRow = select('topicid', 'idreport', 'report', 'errorreport', 'select');
+                $topic = is_array($topicRow) ? (string)($topicRow['idreport'] ?? '') : '';
+                $text = "⚠️ تمدید سرویس با خطای غیرمنتظره (Fatal/Timeout) متوقف شد\n" .
+                    "▫️آیدی کاربر : {$__orderMeta['user_id']}\n" .
+                    "▫️نام کاربری سرویس : " . ($__orderMeta['username'] ?? '—') . "\n" .
+                    "▫️پنل : " . ($__orderMeta['panel'] ?? '—') . "\n" .
+                    "▫️محصول : " . ($__orderMeta['product'] ?? '—') . "\n" .
+                    "▫️خطا : {$err['message']}\n" .
+                    "لطفاً وضعیت این تمدید (کسر موجودی/تمدید سرویس) رو دستی بررسی کنید.";
+                if (function_exists('telegram')) {
+                    telegram('sendmessage', [
+                        'chat_id'           => $channel,
+                        'message_thread_id' => $topic,
+                        'text'              => $text,
+                        'parse_mode'        => 'HTML',
+                    ]);
+                }
+            } catch (Throwable $e) { }
+        });
+
         $username = FaoximaInput::string($this->data, 'username');
         if ($username === '') {
             FaoximaResponse::badRequest('username is required');
         }
+        $__orderMeta['username'] = $username;
 
 
         $invoice = FaoximaDb::fetchOne(
@@ -38,6 +81,7 @@ final class ServiceRenewConfirmHandler extends BaseHandler
                 $panel = $emergencyMap['by_code'][$srcCode];
             }
         }
+        $__orderMeta['panel'] = (string)($panel['name_panel'] ?? $invoice['Service_location'] ?? '');
         if (empty($panel)) {
             FaoximaResponse::notFound('Panel not found');
         }
@@ -71,6 +115,7 @@ final class ServiceRenewConfirmHandler extends BaseHandler
             }
             $product = $row;
         }
+        $__orderMeta['product'] = (string)($product['name_product'] ?? '');
 
 
         $discountCode = FaoximaInput::string($this->data, 'discount_code');
@@ -86,7 +131,12 @@ final class ServiceRenewConfirmHandler extends BaseHandler
                 FaoximaResponse::fail(422, (string)($dv['reason'] ?? '❌ کد تخفیف نامعتبر است.'));
             }
             $product['price_product'] = MiniDiscount::applyToPrice($dv['row'], (float)$product['price_product']);
-            MiniDiscount::markSellUsed($discountCode, $this->user);
+            // [FIX 5] نتیجه‌ی برداشتنِ ظرفیت کد باید بررسی شود؛ وگرنه اگر آخرین ظرفیت
+            // در همان لحظه توسط کاربر دیگری استفاده شده باشد، تخفیف باز هم اعمال
+            // می‌شود و یک کدِ محدود چندین بار مصرف می‌گردد.
+            if (!MiniDiscount::markSellUsed($discountCode, $this->user)) {
+                FaoximaResponse::fail(409, '❌ ظرفیت استفاده از این کد تخفیف همین لحظه پر شد.');
+            }
         }
 
 
@@ -251,6 +301,13 @@ final class ServiceRenewConfirmHandler extends BaseHandler
             if ($balanceCharged) {
                 balance_atomic_credit($this->user['id'], $finalPrice);
             }
+            $this->reportError(
+                "خطای تمدید سرویس (Exception)\n" .
+                "نام پنل : {$panel['name_panel']}\n" .
+                "نام کاربری سرویس : {$invoice['username']}\n" .
+                "دلیل خطا : {$e->getMessage()}"
+            );
+            $__reported = true;
             FaoximaResponse::fail(502, '❌ خطایی در تمدید سرویس رخ داده با پشتیبانی در ارتباط باشید');
         }
 
@@ -273,6 +330,7 @@ final class ServiceRenewConfirmHandler extends BaseHandler
                 "نام کاربری سرویس : {$invoice['username']}\n" .
                 "دلیل خطا : {$reason}"
             );
+            $__reported = true;
             FaoximaResponse::fail(502, '❌ خطایی در تمدید سرویس رخ داده با پشتیبانی در ارتباط باشید');
         }
 
@@ -341,6 +399,7 @@ final class ServiceRenewConfirmHandler extends BaseHandler
             "▫️مبلغ : " . $finalPrice . " تومان\n" .
             "▫️پنل : {$panel['name_panel']}"
         );
+        $__reported = true;
 
         FaoximaLogger::debug('Inline renewal completed', [
             'user_id'   => $this->user['id'],
@@ -369,6 +428,13 @@ final class ServiceRenewConfirmHandler extends BaseHandler
 
     private function buildCustomProduct(array $panel, array $custom, string $agent): array
     {
+        // [FIX 2] اگر فروشنده روی این پنل سرویس دلخواه را فعال نکرده باشد، حداقل و
+        // حداکثر هر دو صفر می‌مانند و حجم ۰ / زمان ۰ از اعتبارسنجی رد می‌شود و
+        // قیمت صفر درمی‌آید — یعنی تمدید رایگانِ نامحدود و بی‌انقضا.
+        if (!$this->customServiceIsOnSale($panel, $agent)) {
+            FaoximaResponse::fail(403, '⛔️ تمدید با سرویس دلخواه روی این سرور برای شما فعال نیست.');
+        }
+
         $volume = (int)($custom['volume_gb'] ?? 0);
         $time   = (int)($custom['time_days']  ?? 0);
 
@@ -386,13 +452,18 @@ final class ServiceRenewConfirmHandler extends BaseHandler
             FaoximaResponse::badRequest("❌ زمان نامعتبر است (بین {$minTime} و {$maxTime} روز)");
         }
 
+        $price = ($volume * $priceV) + ($time * $priceT);
+        // [FIX 2] تمدید با قیمت صفر یا حجم/زمان صفر نباید انجام شود؛ وگرنه سرویس
+        // بدون کسر هیچ مبلغی نامحدود و بی‌انقضا تمدید می‌شود.
+        $this->assertCustomServiceIsSellable($volume, $time, $price);
+
         return [
             'code_product'      => 'customvolume',
             'name_product'      => '⚙️ سرویس دلخواه',
             'Volume_constraint' => $volume,
             'Service_time'      => $time,
             'Location'          => $panel['name_panel'],
-            'price_product'     => ($volume * $priceV) + ($time * $priceT),
+            'price_product'     => $price,
         ];
     }
 
@@ -426,6 +497,10 @@ final class ServiceRenewConfirmHandler extends BaseHandler
 
     private function reportError(string $text): void
     {
+        // [FIX 10] متن خطای پنل ممکن است شامل < باشد (صفحه‌ی HTML خطا) و تلگرام در
+        // حالت parse_mode=HTML چنین پیامی را بی‌صدا دور می‌اندازد؛ یعنی هشدارِ خطای
+        // تمدید دقیقاً در بدترین لحظه به دست ادمین نمی‌رسد.
+        $text = htmlspecialchars($text, ENT_QUOTES, 'UTF-8');
         $channel = (string)($this->setting['Channel_Report'] ?? '');
         if ($channel === '') return;
         $errorRow = select('topicid', 'idreport', 'report', 'errorreport', 'select');

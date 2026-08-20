@@ -125,10 +125,9 @@ final class ServiceActionHandler extends BaseHandler
 
         global $APIKEY;
         $apiKey = is_string($APIKEY ?? null) ? $APIKEY : '';
-        if ($apiKey === '') {
-            $rowKey = select('setting', 'token_bot', null, null, 'select');
-            $apiKey = is_array($rowKey) ? (string)($rowKey['token_bot'] ?? '') : '';
-        }
+        // [FIX 11] فالبکِ خواندن token_bot از جدول setting حذف شد: چنین ستونی در این
+        // اسکیما وجود ندارد و select خطا پرتاب می‌کرد، بنابراین به‌جای پیام تمیزِ ۵۰۳
+        // که سه خط پایین‌تر آماده است، کاربر خطای ۵۰۰ می‌گرفت.
         if ($apiKey === '') {
             FaoximaResponse::fail(503, '❌ توکن ربات روی سرور تنظیم نشده است.');
         }

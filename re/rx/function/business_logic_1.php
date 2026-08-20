@@ -1,5 +1,36 @@
 <?php
 
+/**
+ * 📋 لاگِ ساختِ لینکِ پرداخت — فقط برای عیب‌یابی.
+ *
+ * چرا لازم است: وقتی ساختِ لینک شکست می‌خورد، ربات به مشتری فقط پیامِ
+ * عمومیِ «خطایی در ساخت لینک پرداخت رخ داده است» را نشان می‌دهد و دلیلِ
+ * واقعی فقط به گروهِ گزارش می‌رود. اگر گروهِ گزارش تنظیم نشده باشد (یا
+ * پیامش گم شود)، هیچ ردی از علت باقی نمی‌ماند و عیب‌یابی کور می‌شود.
+ *
+ * این تابع مستقل است چون در پروسه‌ی ربات اجرا می‌شود، نه در کال‌بک —
+ * cubepay_log() فقط داخلِ successful.php تعریف شده و اینجا در دسترس نیست.
+ * فایل خودش می‌چرخد و از ~۱MB بزرگ‌تر نمی‌شود.
+ */
+if (!function_exists('cubepay_pay_log')) {
+    function cubepay_pay_log(string $step, array $context = []): void
+    {
+        $file = __DIR__ . '/../../../payment/ZarinPay/cubepay-create.log';
+        $dir = dirname($file);
+        if (!is_dir($dir)) {
+            return; // مسیرِ استانداردِ فاکسیما نیست — بی‌سروصدا رد شو
+        }
+        if (is_file($file) && filesize($file) > 1048576) {
+            @rename($file, $file . '.1');
+        }
+        $line = '[' . date('Y-m-d H:i:s') . '] ' . $step;
+        if ($context) {
+            $line .= ' — ' . json_encode($context, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
+        }
+        @file_put_contents($file, $line . "\n", FILE_APPEND | LOCK_EX);
+    }
+}
+
 if (!function_exists('rx_auth_skip_user')) {
     function rx_auth_skip_user($user)
     {
@@ -35,7 +66,9 @@ function isBase64($string)
 function sendMessageService($panel_info, $config, $sub_link, $username_service, $reply_markup, $caption, $invoice_id, $user_id = null, $image = 'images.jpg')
 {
     global $setting, $from_id;
+if (function_exists('cubepay_log')) cubepay_log('SMS: enter');
     $config = normalizeServiceConfigs($config);
+    if (function_exists('cubepay_log')) cubepay_log('SMS: configs normalized');
     if (!check_active_btn($setting['keyboardmain'], "text_help"))
         $reply_markup = null;
     $user_id = $user_id == null ? $from_id : $user_id;
@@ -55,12 +88,23 @@ function sendMessageService($panel_info, $config, $sub_link, $username_service, 
     if ($STATUS_SEND_MESSAGE_PHOTO) {
 
         $infoCardSent = false;
+        $rxDelivered  = false;   // [FIX] آیا کانفیگ واقعاً به دستِ مشتری رسید؟
+        if (function_exists('cubepay_log')) cubepay_log('SMS: branch photo', ['infocard_available' => function_exists('getInfoCardStatus') ? 'yes' : 'no']);
         if (function_exists('getInfoCardStatus') && getInfoCardStatus()) {
+if (function_exists('cubepay_log')) cubepay_log('SMS: rendering info card');
             $cardPath = nm_renderInfoCardForInvoice($panel_info, $username_service, $invoice_id, $user_id);
+            if (function_exists('cubepay_log')) cubepay_log('SMS: info card rendered', ['path' => $cardPath ?? 'null']);
             if ($cardPath !== null) {
 
                 $cardKeyboard = nm_appendInfoCardQrButton($reply_markup, $invoice_id);
-                telegram('sendphoto', [
+                // [FIX تحویل‌نشدن کانفیگ] نتیجه‌ی ارسال دور ریخته می‌شد و
+                // $infoCardSent بی‌قید true می‌شد. کپشن شاملِ لینک ساب و کلِ لیست
+                // کانفیگ‌هاست و محدودیتِ کپشنِ عکس در تلگرام ۱۰۲۴ کاراکتر است؛ یک
+                // سرویسِ چندکانفیگی راحت از آن رد می‌شود و تلگرام پیام را رد می‌کند
+                // («Message caption is too long»). چون هیچ‌کس این خطا را نمی‌دید،
+                // خرید کامل ثبت می‌شد، کیف پول کسر می‌شد و گزارشِ «خرید موفق» هم
+                // می‌رفت — ولی مشتری هرگز لینکش را نمی‌گرفت.
+                $rxCardRes = telegram('sendphoto', [
                     'chat_id' => $user_id,
                     'photo' => new CURLFile($cardPath),
                     'reply_markup' => $cardKeyboard,
@@ -68,25 +112,42 @@ function sendMessageService($panel_info, $config, $sub_link, $username_service, 
                     'parse_mode' => "HTML",
                 ]);
                 @unlink($cardPath);
-                $infoCardSent = true;
+                $infoCardSent = is_array($rxCardRes) && !empty($rxCardRes['ok']);
+                $rxDelivered  = $infoCardSent;
             }
         }
         if (!$infoCardSent) {
 
             $urlimage = "$user_id$invoice_id.png";
+            if (function_exists('cubepay_log')) cubepay_log('SMS: building qr');
             $qrCode = createqrcode($out_put_qrcode);
-            file_put_contents($urlimage, $qrCode->getString());
+            if (function_exists('cubepay_log')) cubepay_log('SMS: qr built');
+            $qrBytes = @file_put_contents($urlimage, $qrCode->getString());
+            if (function_exists('cubepay_log')) cubepay_log('SMS: qr written', ['file' => $urlimage, 'bytes' => $qrBytes === false ? 'WRITE FAILED' : $qrBytes, 'cwd' => getcwd()]);
             if (!addBackgroundImage($urlimage, $qrCode, $image)) {
                 error_log("Unable to apply background image for QR code using path '{$image}'");
             }
-            telegram('sendphoto', [
+if (function_exists('cubepay_log')) cubepay_log('SMS: sending qr photo', ['chat' => $user_id]);
+            $tgResult = telegram('sendphoto', [
                 'chat_id' => $user_id,
                 'photo' => new CURLFile($urlimage),
                 'reply_markup' => $reply_markup,
                 'caption' => $caption,
                 'parse_mode' => "HTML",
             ]);
-            unlink($urlimage);
+            if (function_exists('cubepay_log')) cubepay_log('SMS: qr photo sent', ['tg_ok' => is_array($tgResult) ? ($tgResult['ok'] ?? 'no-ok-field') : gettype($tgResult)]);
+            @unlink($urlimage);
+            $rxDelivered = is_array($tgResult) && !empty($tgResult['ok']);
+        }
+        // [FIX تحویل‌نشدن کانفیگ] اگر هیچ‌کدام از دو مسیرِ عکس موفق نشد، کانفیگ را
+        // به‌صورت متنی بفرست. پله‌ی دوم بدون HTML است، چون اگر تلگرام به‌خاطر
+        // تگِ ناموزون در متن (مثلاً «<» داخل نام محصول) پیام را رد کرده باشد،
+        // ارسالِ ساده هنوز جواب می‌دهد. هدف: مشتری در هر حالتی لینکش را بگیرد.
+        if (empty($rxDelivered)) {
+            $rxTextRes = sendmessage($user_id, $caption, $reply_markup, 'HTML');
+            if (!is_array($rxTextRes) || empty($rxTextRes['ok'])) {
+                sendmessage($user_id, strip_tags((string) $caption), $reply_markup, '');
+            }
         }
         if ($panel_info['type'] == "WGDashboard") {
             $urlimage = "{$panel_info['inboundid']}_{$username_service}.conf";
@@ -95,8 +156,10 @@ function sendMessageService($panel_info, $config, $sub_link, $username_service, 
             unlink($urlimage);
         }
     } else {
+        if (function_exists('cubepay_log')) cubepay_log('SMS: branch text only');
         sendmessage($user_id, $caption, $reply_markup, 'HTML');
     }
+    if (function_exists('cubepay_log')) cubepay_log('SMS: main send done');
     if ($panel_info['config'] == "onconfig" && $setting['status_keyboard_config'] == "1" && function_exists('keyboard_config')) {
         if (is_array($config)) {
             $validConfigs = array_values(array_filter($config, function ($item) {
@@ -186,11 +249,18 @@ function createPayZarinpey($price, $order_id, $userId)
 
     $token = getPaySettingValue('token_zarinpey');
     if (empty($token) || $token === '0') {
+        cubepay_pay_log('FAIL: توکن تنظیم نشده', ['order_id' => $order_id]);
         return [
             'success' => false,
             'message' => 'توکن زرین پی تنظیم نشده است.',
         ];
     }
+    cubepay_pay_log('start', [
+        'order_id'      => $order_id,
+        'price_toman'   => $price,
+        'token_prefix'  => substr((string) $token, 0, 8) . '…',
+        'token_is_vip'  => str_starts_with((string) $token, 'vip_') || str_starts_with((string) $token, 'vipsb_') ? 'yes' : 'no',
+    ]);
 
     $normalizedPrice = filter_var($price, FILTER_VALIDATE_INT, [
         'options' => [
@@ -205,7 +275,23 @@ function createPayZarinpey($price, $order_id, $userId)
         ];
     }
 
-    $amountRial = $normalizedPrice * 10;
+    // 🧾 کارمزدِ قابل‌انتقال به مشتری — تنظیمِ «کارمزد ثابت» در پنل ادمین ربات:
+    //   عددِ 0 تا 100  → درصدِ اضافه‌شونده روی فاکتور (اعشار مجاز، مثلاً 9.9)
+    //   عددِ بالای 100 → مبلغِ ثابت به تومان
+    // فقط مبلغِ فاکتورِ درگاه بزرگ‌تر می‌شود؛ کیف پول مشتری همچنان به اندازه‌ی
+    // مبلغِ درخواستیِ خودش شارژ می‌شود (successful.php با price سفارش کار می‌کند).
+    // چون قبل از ساختِ سفارش اعمال می‌شود، برای کارت‌به‌کارت، کریپتو و VIP یکسان کار می‌کند.
+    $payablePrice = $normalizedPrice;
+    if (getPaySettingValue('zarinpeyfeestatus', 'offzarinpeyfee') === 'onzarinpeyfee') {
+        $feeSetting = (float) str_replace([',', '،'], '', (string) getPaySettingValue('zarinpeyfeeamount', '0'));
+        if ($feeSetting > 0) {
+            $payablePrice = $feeSetting <= 100
+                ? (int) ceil($normalizedPrice * (1 + $feeSetting / 100))
+                : $normalizedPrice + (int) round($feeSetting);
+        }
+    }
+
+    $amountRial = $payablePrice * 10;
 
     $baseHost = trim($domainhosts ?? '');
     $scheme = 'https';
@@ -228,16 +314,17 @@ function createPayZarinpey($price, $order_id, $userId)
         ];
     }
 
+    // ⬇️ روتر یکپارچه‌ی CubePay — بسته به تنظیماتِ حسابِ شما تو ربات CubePay
+    // («⚙️ تنظیمات بیشتر → 💳 روش‌های پرداخت»)، خودش تصمیم می‌گیره فاکتور
+    // کارت‌به‌کارت بسازه، فاکتور کریپتویی بسازه، یا صفحه‌ی «کارت یا کریپتو؟»
+    // به مشتری نشون بده. برخلاف endpoint قدیمی، مبلغ اینجا «تومان»ه نه ریال.
     $payload = [
-        'amount' => $amountRial,
         'order_id' => $order_id,
+        'price_amount' => $payablePrice,
         'callback_url' => rtrim($callbackBase, '/') . '/payment/ZarinPay/successful.php',
-        'type' => 'card',
-        'customer_user_id' => $userId,
-        'description' => sprintf('پرداخت فاکتور %s', $order_id),
     ];
 
-    $ch = curl_init('https://zarinpay.me/api/create-payment');
+    $ch = curl_init('https://cubevps.ir/pay/create-order.php');
     curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
     curl_setopt($ch, CURLOPT_POST, true);
     curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload, JSON_UNESCAPED_UNICODE));
@@ -252,6 +339,7 @@ function createPayZarinpey($price, $order_id, $userId)
     if (curl_errno($ch)) {
         $error = curl_error($ch);
         curl_close($ch);
+        cubepay_pay_log('FAIL: خطای شبکه (cURL)', ['order_id' => $order_id, 'curl_error' => $error]);
 
         return [
             'success' => false,
@@ -263,6 +351,11 @@ function createPayZarinpey($price, $order_id, $userId)
 
     $result = json_decode($response, true);
     if (!is_array($result)) {
+        cubepay_pay_log('FAIL: پاسخ غیر-JSON', [
+            'order_id'  => $order_id,
+            'http_code' => $httpCode,
+            'body'      => mb_substr((string) $response, 0, 300),
+        ]);
         return [
             'success' => false,
             'message' => 'پاسخ نامعتبر از زرین پی دریافت شد.',
@@ -270,6 +363,13 @@ function createPayZarinpey($price, $order_id, $userId)
     }
 
     if (empty($result['success'])) {
+        // ⭐ مهم‌ترین حالت: خودِ CubePay درخواست را رد کرده و *دلیلش را گفته*.
+        // این همان متنی است که برای رفعِ مشکل لازم است.
+        cubepay_pay_log('FAIL: CubePay درخواست را رد کرد', [
+            'order_id'  => $order_id,
+            'http_code' => $httpCode,
+            'reason'    => $result['message'] ?? '(بدون پیام)',
+        ]);
         return [
             'success' => false,
             'message' => $result['message'] ?? 'خطا در ایجاد پرداخت',
@@ -279,21 +379,42 @@ function createPayZarinpey($price, $order_id, $userId)
 
     $data = $result['data'] ?? [];
     $authority = $result['authority'] ?? ($data['authority'] ?? null);
-    $paymentLink = $result['payment_link']
-        ?? ($result['payment_url'] ?? ($data['payment_link'] ?? ($data['payment_url'] ?? null)));
+    $paymentLink = $result['pay_page_url']
+        ?? ($result['payment_link'] ?? ($result['payment_url'] ?? ($data['payment_link'] ?? ($data['payment_url'] ?? null))));
 
-    if (empty($authority) || empty($paymentLink)) {
+    // 📌 نکته: وقتی هر دو روش (کارت + کریپتو) فعال باشن، CubePay هنوز
+    // authority نمی‌ده (چون مشتری هنوز روش رو انتخاب نکرده) — این طبیعیه و
+    // خطا نیست. فقط لینک پرداخت اجباریه؛ نتیجه‌ی نهایی از طریق callback میاد.
+    if (empty($paymentLink)) {
+        cubepay_pay_log('FAIL: پاسخ موفق بود ولی لینک پرداخت نداشت', [
+            'order_id' => $order_id,
+            'keys'     => implode(',', array_keys($result)),
+        ]);
         return [
             'success' => false,
-            'message' => 'پاسخ نامعتبر از زرین پی دریافت شد.',
+            'message' => $result['message'] ?? 'پاسخ نامعتبر از درگاه دریافت شد.',
         ];
     }
+
+    $exactAmountToman = $result['pay_amount_toman']
+        ?? ($data['pay_amount_toman'] ?? null);
+    if ($exactAmountToman === null) {
+        // درگاه‌هایی که این فیلد رو برنمی‌گردونن (مثل zarinpay.me قدیم)، به
+        // همون مبلغ رند بدون آفست fallback می‌کنیم.
+        $exactAmountToman = intdiv($amountRial, 10);
+    }
+
+    cubepay_pay_log('OK: لینک پرداخت ساخته شد', [
+        'order_id' => $order_id,
+        'method'   => $result['method'] ?? '(router)',
+    ]);
 
     return [
         'success' => true,
         'authority' => $authority,
         'payment_link' => $paymentLink,
         'amount_rial' => $amountRial,
+        'pay_amount_toman' => (int) $exactAmountToman,
         'raw_response' => $result,
     ];
 }
