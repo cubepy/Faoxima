@@ -74,7 +74,7 @@ class ManagePanel
         $expire = $Data_Config['expire'];
         $data_limit = $Data_Config['data_limit'];
         $note = "{$Data_Config['from_id']} | {$Data_Config['username']} | {$Data_Config['type']}";
-        if ($Get_Data_Panel['type'] == "marzban") {
+        if (in_array($Get_Data_Panel['type'], ["marzban", "pasargard"], true)) {
 
             $ConnectToPanel = adduser($Get_Data_Panel['name_panel'], $data_limit, $usernameC, $expire, $note, $Get_Data_Product['data_limit_reset'], $Get_Data_Product['name_product']);
             if (!empty($ConnectToPanel['status']) && $ConnectToPanel['status'] == 500) {
@@ -545,7 +545,7 @@ class ManagePanel
         } else {
             $inoice = false;
         }
-        if ($Get_Data_Panel['type'] == "marzban") {
+        if (in_array($Get_Data_Panel['type'], ["marzban", "pasargard"], true)) {
             $UsernameData = getuser($username, $Get_Data_Panel['name_panel']);
             if (!empty($UsernameData['error'])) {
                 $Output = array(
@@ -1194,7 +1194,7 @@ class ManagePanel
         $Output = array();
         $ManagePanel = new ManagePanel();
         $Get_Data_Panel = $this->loadPanel($name_panel, "name_panel");
-        if ($Get_Data_Panel['type'] == "marzban") {
+        if (in_array($Get_Data_Panel['type'], ["marzban", "pasargard"], true)) {
             $revoke_sub = revoke_sub($username, $name_panel);
             if (isset($revoke_sub['detail']) && $revoke_sub['detail']) {
                 $Output = array(
@@ -1409,7 +1409,7 @@ class ManagePanel
     {
         $Output = array();
         $Get_Data_Panel = $this->loadPanel($name_panel, "name_panel");
-        if ($Get_Data_Panel['type'] == "marzban") {
+        if (in_array($Get_Data_Panel['type'], ["marzban", "pasargard"], true)) {
             $UsernameData = removeuser($Get_Data_Panel['name_panel'], $username);
             if (!empty($UsernameData['status']) && $UsernameData['status'] != 200) {
                 return array(
@@ -1583,7 +1583,7 @@ class ManagePanel
                 'msg' => 'Panel Not Found'
             );
         }
-        if ($Get_Data_Panel['type'] == "marzban") {
+        if (in_array($Get_Data_Panel['type'], ["marzban", "pasargard"], true)) {
             if ((string)($Get_Data_Panel['version_panel'] ?? '0') === '1') {
                 $result = getuser($username, $name_panel);
                 if (!empty($result['body'])) {
@@ -1883,7 +1883,7 @@ class ManagePanel
             );
             return;
         }
-        if ($Get_Data_Panel['type'] == "marzban") {
+        if (in_array($Get_Data_Panel['type'], ["marzban", "pasargard"], true)) {
             if ($DataUserOut['status'] == "active") {
                 $status = "disabled";
             } else {
@@ -1988,7 +1988,7 @@ class ManagePanel
                 'msg' => 'data not found'
             );
         }
-        if ($panel['type'] == "marzban") {
+        if (in_array($panel['type'], ["marzban", "pasargard"], true)) {
             $reset = ResetUserDataUsage($username, $panel['name_panel']);
             if (!empty($reset['status']) && $reset['status'] != 200) {
                 return array(
@@ -2221,7 +2221,7 @@ class ManagePanel
             $data_limit_last = $data_limit_last < 0 ? 0 : $data_limit_last;
             $data_limit_new = $data_limit_new + $data_limit_last;
         }
-        if ($panel['type'] == "marzban") {
+        if (in_array($panel['type'], ["marzban", "pasargard"], true)) {
             $data = array(
                 'data_limit' => $data_limit_new,
                 'expire' => $time_new,
@@ -2427,7 +2427,7 @@ class ManagePanel
         }
         update("invoice", 'uuid', null, "username", $username_account);
         update("invoice", 'Status', "active", "username", $username_account);
-        if ($panel['type'] == "marzban") {
+        if (in_array($panel['type'], ["marzban", "pasargard"], true)) {
             $data = array(
                 'data_limit' => $new_limit,
                 'inbounds' => $inbounds,
@@ -2584,7 +2584,7 @@ class ManagePanel
         }
         update("invoice", 'uuid', null, "username", $username_account);
         update("invoice", 'Status', "active", "username", $username_account);
-        if ($panel['type'] == "marzban") {
+        if (in_array($panel['type'], ["marzban", "pasargard"], true)) {
             $data = array(
                 'expire' => $new_limit,
                 'inbounds' => $inbounds,

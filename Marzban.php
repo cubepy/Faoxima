@@ -295,7 +295,11 @@ function adduser($location,$data_limit,$username_ac,$timestamp,$note ='',$data_l
         $inbounds = json_decode($marzban_list_get['inbounds'],true);
             }
         }
-    if ((string)($marzban_list_get['version_panel'] ?? '0') === '1') {
+    // PasarGuard (marzban_panel.type == "pasargard") یک fork از Marzban با همان
+    // API چرخه‌ی حساب است و همیشه از payloadِ نسخه‌ی جدید (proxy_settings/group_ids)
+    // استفاده می‌کند — چه ستون version_panel روی '1' باشد چه نباشد. برای همین اگر
+    // نوع پنل pasargard باشد، بدون توجه به version_panel این شاخه اجرا می‌شود.
+    if ((string)($marzban_list_get['version_panel'] ?? '0') === '1' || ($marzban_list_get['type'] ?? '') === 'pasargard') {
             $data = array(
             "proxy_settings" => json_decode($marzban_list_get['proxies']),
             "data_limit" => $data_limit,
