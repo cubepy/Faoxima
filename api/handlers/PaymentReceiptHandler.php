@@ -33,10 +33,28 @@ final class PaymentReceiptHandler extends BaseHandler
 
         // [FIX 9] فقط حجم فایل بررسی می‌شد، پس هر فایلی تا ۸ مگابایت به‌عنوان «رسید»
         // برای همه‌ی ادمین‌ها ارسال می‌شد. رسید یعنی تصویر.
-        $receiptImage = @getimagesize($tmp);
-        if ($receiptImage === false
-            || !in_array($receiptImage[2] ?? 0, [IMAGETYPE_JPEG, IMAGETYPE_PNG, IMAGETYPE_WEBP], true)) {
-            FaoximaResponse::badRequest('❌ فایل باید یک تصویر (JPG، PNG یا WEBP) باشد.');
+        //
+        // [FIX 9b — مهم] نسخه‌ی اولِ این گارد فقط JPG/PNG/WEBP را می‌پذیرفت و
+        // رسیدِ کاربرانِ آیفون را رد می‌کرد: iOS عکس‌ها را با فرمت HEIC/HEIF ذخیره
+        // می‌کند و همیشه هنگام آپلود به JPEG تبدیل نمی‌شود. ضمناً getimagesize()
+        // اصلاً HEIC را نمی‌شناسد و برایش false برمی‌گرداند.
+        // هدفِ این گارد جلوگیری از ارسالِ فایل‌های غیرتصویری (zip/pdf/exe) به کانال
+        // ادمین است، نه محدودکردنِ فرمت‌های عکس. پس: هر چیزی که getimagesize
+        // به‌عنوان تصویر بشناسد پذیرفته می‌شود، و HEIC/HEIF/AVIF هم از روی امضای
+        // بایتیِ خودشان (باکسِ ftyp) شناسایی و پذیرفته می‌شوند.
+        $receiptIsImage = (@getimagesize($tmp) !== false);
+        if (!$receiptIsImage) {
+            $head = (string) @file_get_contents($tmp, false, null, 0, 32);
+            if (strlen($head) >= 12 && substr($head, 4, 4) === 'ftyp') {
+                $brand = strtolower(substr($head, 8, 4));
+                // heic/heix/hevc/mif1/msf1 = HEIF ، avif/avis = AVIF
+                if (in_array($brand, ['heic','heix','hevc','hevx','mif1','msf1','avif','avis'], true)) {
+                    $receiptIsImage = true;
+                }
+            }
+        }
+        if (!$receiptIsImage) {
+            FaoximaResponse::badRequest('❌ فایل ارسالی تصویر نیست. لطفاً تصویر رسید را بفرستید.');
         }
 
         // [FIX 9] هر رسید یک عکس برای تک‌تک ادمین‌ها می‌فرستد و تنها فاکتورِ تأییدشده
@@ -54,7 +72,13 @@ final class PaymentReceiptHandler extends BaseHandler
         } catch (Throwable $e) {
             $recentReceipts = 0;
         }
-        if ($recentReceipts >= 3) {
+        // [FIX 9b] سقف از ۳ به ۱۵ افزایش یافت. این کوئری «رسیدهای فرستاده‌شده» را
+        // نمی‌شمارد، بلکه فاکتورهای در انتظارِ تاییدِ کاربر را می‌شمارد (ارسالِ دوباره‌ی
+        // رسید برای همان سفارش یک UPDATE است و ستون time عوض نمی‌شود). با سقفِ ۳،
+        // مشتری‌ای که چند سفارشِ در انتظارِ تایید داشت از فرستادنِ رسیدِ سفارشِ بعدی
+        // قفل می‌شد — یعنی گارد به‌جای مهاجم، مشتریِ واقعی را می‌گرفت.
+        // سقفِ بالاتر همچنان جلوی سیلِ واقعی را می‌گیرد ولی مشتری عادی به آن نمی‌خورد.
+        if ($recentReceipts >= 15) {
             FaoximaResponse::fail(429, '⏳ به‌تازگی چند رسید فرستاده‌اید. چند دقیقه صبر کنید و اگر مشکلی هست با پشتیبانی در ارتباط باشید.');
         }
 
@@ -157,6 +181,7 @@ final class PaymentReceiptHandler extends BaseHandler
         $notifyDeadline = microtime(true) + 20.0;
 
         $fileId = null;
+        $docDelivered = false;
         $failedAdmins = [];
         $remainingAdmins = $adminIds;
         while (!empty($remainingAdmins) && microtime(true) < $notifyDeadline) {
@@ -165,6 +190,14 @@ final class PaymentReceiptHandler extends BaseHandler
             if (is_string($maybeFileId) && $maybeFileId !== '') {
                 $fileId = $maybeFileId;
                 break;
+            }
+            // [FIX 9b] عکس‌های آیفون با فرمت HEIC را تلگرام به‌عنوان «photo» قبول
+            // نمی‌کند، ولی به‌عنوان «document» می‌پذیرد. قبلاً در این حالت مستقیم به
+            // پیامِ متنی برمی‌گشتیم و ادمین اصلاً تصویرِ رسید را نمی‌دید — یعنی باید
+            // بدونِ دیدنِ رسید تصمیم می‌گرفت. حالا اول فایل را به شکل سند می‌فرستیم.
+            if ($this->sendReceiptDocument($apiKey, $candidate, $tmp, (string)($f['type'] ?? ''), (string)($f['name'] ?? ''), $caption, $keyboard)) {
+                $docDelivered = true;
+                continue;
             }
             $failedAdmins[] = $candidate;
         }
@@ -177,7 +210,7 @@ final class PaymentReceiptHandler extends BaseHandler
                     $textOk = true;
                 }
             }
-            if (!$textOk) {
+            if (!$textOk && !$docDelivered) {
                 FaoximaLogger::warn('Receipt: all admins unreachable', ['admins' => $failedAdmins]);
                 FaoximaResponse::fail(502, '❌ ارسال رسید به ادمین ناموفق بود. لطفاً دوباره تلاش کنید.');
             }
@@ -233,6 +266,55 @@ final class PaymentReceiptHandler extends BaseHandler
         ]);
     }
 
+
+    /**
+     * [FIX 9b] ارسالِ رسید به‌شکلِ «سند».
+     * تلگرام برای sendPhoto فقط چند فرمتِ محدود را می‌پذیرد و عکس‌های HEIC/HEIF
+     * آیفون را رد می‌کند؛ ولی همان فایل را به‌عنوان document قبول می‌کند. بدون این
+     * مسیر، ادمین فقط یک پیامِ متنی می‌گرفت و باید بدونِ دیدنِ رسید تصمیم می‌گرفت.
+     */
+    private function sendReceiptDocument(string $apiKey, string $chatId, string $localPath, string $mime, string $originalName, string $caption, string $keyboardJson): bool
+    {
+        $ext = strtolower((string) pathinfo($originalName, PATHINFO_EXTENSION));
+        if ($ext === '' || strlen($ext) > 5 || !preg_match('/^[a-z0-9]+$/', $ext)) {
+            $ext = 'jpg';
+        }
+        if ($mime === '') {
+            $mime = 'application/octet-stream';
+        }
+        $ch = curl_init('https://api.telegram.org/bot' . $apiKey . '/sendDocument');
+        if (function_exists('faoxima_apply_curl_proxy')) faoxima_apply_curl_proxy($ch, 'telegram');
+        $post = [
+            'chat_id'      => $chatId,
+            'caption'      => $caption,
+            'parse_mode'   => 'HTML',
+            'reply_markup' => $keyboardJson,
+            'document'     => new CURLFile($localPath, $mime, 'receipt.' . $ext),
+        ];
+        curl_setopt_array($ch, [
+            CURLOPT_POST           => true,
+            CURLOPT_POSTFIELDS     => $post,
+            CURLOPT_RETURNTRANSFER => true,
+            CURLOPT_TIMEOUT        => 10,
+            CURLOPT_CONNECTTIMEOUT => 5,
+            CURLOPT_SSL_VERIFYPEER => true,
+        ]);
+        $response = curl_exec($ch);
+        $httpCode = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+        $curlErr  = curl_error($ch);
+        curl_close($ch);
+
+        if ($httpCode !== 200 || !$response) {
+            FaoximaLogger::warn('sendDocument HTTP failed', ['http' => $httpCode, 'curl_err' => $curlErr, 'admin' => $chatId]);
+            return false;
+        }
+        $tg = json_decode((string) $response, true);
+        if (!is_array($tg) || empty($tg['ok'])) {
+            FaoximaLogger::warn('sendDocument rejected', ['desc' => is_array($tg) ? (string)($tg['description'] ?? '') : '', 'admin' => $chatId]);
+            return false;
+        }
+        return true;
+    }
 
     private function sendReceiptPhoto(string $apiKey, string $chatId, string $localPath, string $mime, string $caption, string $keyboardJson): ?string
     {
