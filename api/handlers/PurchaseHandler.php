@@ -118,13 +118,87 @@ final class PurchaseHandler extends BaseHandler
         $usernameAc = strtolower((string)$usernameAc);
 
 
-        $existsLocal = FaoximaDb::fetchScalar(
-            'SELECT 1 FROM invoice WHERE username = :u LIMIT 1',
-            [':u' => $usernameAc]
-        );
-        $remoteCheck = $managePanel->DataUser($panel['name_panel'], $usernameAc);
-        if ($existsLocal || (is_array($remoteCheck) && isset($remoteCheck['username']))) {
-            FaoximaResponse::fail(409, 'نام کاربری وجود دارد مراحل را از اول طی کنید');
+        // [FIX خرید قفل‌شده با «نام کاربری وجود دارد»]
+        // روش‌های «عدد ترتیبی» نام را از یک شمارنده می‌سازند و آن شمارنده فقط پس از
+        // یک خریدِ کاملاً موفق جلو می‌رود. پس اگر یک خرید نیمه‌کاره بماند (خطای پنل،
+        // تایم‌اوت، یا همان «Panel Not Found» که روی پنل پاسارگاد داشتیم) و ردیفِ
+        // فاکتور باقی بماند، شمارنده سرِ جای قبلی می‌ماند و هر خریدِ بعدی دقیقاً همان
+        // نام را می‌سازد → «نام کاربری وجود دارد مراحل را از اول طی کنید».
+        // «از اول طی کردن» هم چاره نبود، چون همان نام دوباره ساخته می‌شد؛ یعنی
+        // فروشگاه برای همیشه روی آن پنل قفل می‌شد.
+        // ربات از قبل rxResolveUsernameCollision را داشت و به‌جای خطا، شماره‌ی آزاد
+        // بعدی را پیدا و شمارنده را جلو می‌برد. مینی‌اپ این کار را نمی‌کرد.
+        $rxTakenOnPanel = function ($cand) use ($managePanel, $panel) {
+            try {
+                $d = $managePanel->DataUser($panel['name_panel'], $cand);
+            } catch (Throwable $e) {
+                return true;   // مطمئن نیستیم آزاد است — روی نام دیگری می‌رویم
+            }
+            return is_array($d) && isset($d['username']);
+        };
+        $rxTakenLocally = function ($cand) {
+            return (bool) FaoximaDb::fetchScalar(
+                'SELECT 1 FROM invoice WHERE username = :u LIMIT 1',
+                [':u' => $cand]
+            );
+        };
+
+        if ($rxTakenLocally($usernameAc) || $rxTakenOnPanel($usernameAc)) {
+            $rxResolved  = null;
+            $rxGlobalSeq = in_array($methodUsername, ['متن دلخواه + عدد ترتیبی', 'متن دلخواه نماینده + عدد ترتیبی'], true);
+            $rxUserSeq   = in_array($methodUsername, ['نام کاربری + عدد به ترتیب', 'آیدی عددی+عدد ترتیبی'], true);
+
+            if (($rxGlobalSeq || $rxUserSeq) && preg_match('/^(.*)_(\d+)$/', $usernameAc, $rxParts)) {
+                $rxBase = $rxParts[1];
+                $rxNum  = (int) $rxParts[2];
+
+                // نام‌های گرفته‌شده‌ی این پایه را یکجا می‌خوانیم تا به‌جای ۳۰ تماس
+                // با پنل، فقط یک کوئری بزنیم و بعد تنها کاندیدای نهایی را از پنل بپرسیم.
+                $rxTakenSet = [];
+                try {
+                    $rows = FaoximaDb::fetchAll(
+                        "SELECT username FROM invoice WHERE username LIKE :like",
+                        [':like' => str_replace(['\\', '%', '_'], ['\\\\', '\\%', '\\_'], $rxBase) . '\_%']
+                    );
+                    foreach ($rows as $r) {
+                        $rxTakenSet[strtolower((string) $r['username'])] = true;
+                    }
+                } catch (Throwable $e) {
+                    $rxTakenSet = [];
+                }
+
+                for ($i = 1; $i <= 200; $i++) {
+                    $cand = strtolower($rxBase . '_' . ($rxNum + $i));
+                    if (isset($rxTakenSet[$cand])) continue;
+                    if ($rxTakenOnPanel($cand)) continue;
+                    if ($rxGlobalSeq) {
+                        update('setting', 'numbercount', $rxNum + $i);
+                        // شمارنده‌ی درون‌حافظه را هم جلو می‌بریم، وگرنه افزایشِ پایین‌ترِ
+                        // همین فایل که از مقدارِ کهنه حساب می‌کند، این اصلاح را خنثی می‌کرد.
+                        $this->setting['numbercount'] = $rxNum + $i;
+                    } else {
+                        update('user', 'number_username', $rxNum + $i, 'id', $this->user['id']);
+                        $this->user['number_username'] = $rxNum + $i;
+                    }
+                    $rxResolved = $cand;
+                    break;
+                }
+            }
+
+            // روش‌های غیرترتیبی (یا وقتی ۲۰۰ شماره‌ی بعدی هم پر بود): پسوند تصادفی
+            if ($rxResolved === null) {
+                for ($i = 0; $i < 12; $i++) {
+                    $cand = strtolower($usernameAc . '_' . random_int(100, 999));
+                    if ($rxTakenLocally($cand) || $rxTakenOnPanel($cand)) continue;
+                    $rxResolved = $cand;
+                    break;
+                }
+            }
+
+            if ($rxResolved === null) {
+                FaoximaResponse::fail(409, 'ساخت نام کاربری برای این سرور ممکن نشد. لطفاً با پشتیبانی در ارتباط باشید.');
+            }
+            $usernameAc = $rxResolved;
         }
 
 

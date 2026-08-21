@@ -505,7 +505,22 @@ export async function buy(view) {
         wireBackBtn(host);
 
         const $btn = host.querySelector('#do-purchase');
+        // [FIX ارسال دوباره] گاردِ $btn.disabled پایین‌تر، فقط *بعد از* دیالوگ تایید
+        // فعال می‌شد. دو ضربه‌ی سریع روی دکمه (کاری که کاربر وقتی شبکه کند است انجام
+        // می‌دهد) دو دیالوگ باز می‌کرد و هر دو خرید ارسال می‌شدند — و دو پیام خطای
+        // یکسان روی هم می‌نشست. این قفل از همان اولین ضربه بسته می‌شود.
+        let rxPurchaseBusy = false;
         $btn.addEventListener('click', async () => {
+            if (rxPurchaseBusy) return;
+            rxPurchaseBusy = true;
+            try {
+              await rxDoPurchase();
+            } finally {
+              rxPurchaseBusy = false;
+            }
+        });
+
+        async function rxDoPurchase() {
             const customUsername = host.querySelector('#custom-username')?.value?.trim() || '';
             const customNote = host.querySelector('#custom-note')?.value?.trim() || '';
             const discountCode = host.querySelector('#buy-discount')?.value?.trim() || '';
@@ -604,7 +619,7 @@ export async function buy(view) {
                 $btn.disabled = false;
                 $btn.innerHTML = `<span>پرداخت و ساخت سرویس</span><span class="arrow">→</span>`;
             }
-        });
+        }
     }
 
 
