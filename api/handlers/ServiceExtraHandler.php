@@ -348,7 +348,7 @@ final class ServiceExtraHandler extends BaseHandler
         if (empty($panel)) {
             FaoximaResponse::notFound('Panel not found');
         }
-        if (($panel['status_extend'] ?? '') === 'off_extend') {
+        if (($panel['status_extend'] ?? '') !== 'on_extend') {
             FaoximaResponse::fail(409, $kind === 'time'
                 ? '❌ امکان خرید زمان اضافه در این پنل وجود ندارد'
                 : '❌ امکان خرید حجم اضافه در این پنل وجود ندارد');

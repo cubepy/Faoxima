@@ -12,6 +12,7 @@ if (!defined('FAOXIMA_SKIP_BOTAPI_ROUTER')) {
 
 session_start();
 require_once __DIR__ . '/../config.php';
+require_once __DIR__ . '/../x-ui_single.php';
 require_once __DIR__ . '/lib/icons.php';
 
 $query = $pdo->prepare("SELECT * FROM admin WHERE username=:username");
@@ -237,12 +238,16 @@ function faoxima_test_panel_auth(string $url, string $username, string $password
         if ($username === '' || $password === '') {
             return ['ok' => true, 'verified' => false, 'message' => 'یوزرنیم یا پسورد خالی است'];
         }
+        // Modern 3x-ui panels bind /login as JSON ({username, password,
+        // twoFactorCode}) via Gin's ShouldBindJSON. A form-urlencoded body is
+        // not valid JSON and is rejected before credentials are even checked,
+        // so this must send real JSON with the matching Content-Type.
         $r = faoxima_http_post(
             $url . '/login',
-            http_build_query(['username' => $username, 'password' => $password]),
-            ['Content-Type: application/x-www-form-urlencoded']
+            json_encode(['username' => $username, 'password' => $password, 'twoFactorCode' => '']),
+            ['Content-Type: application/json', 'Accept: application/json']
         );
-        
+
         if (!$r['ok']) {
             return ['ok' => false, 'verified' => false, 'message' => 'اتصال ناموفق: ' . $r['error']];
         }
@@ -252,6 +257,9 @@ function faoxima_test_panel_auth(string $url, string $username, string $password
         if (is_array($j) && array_key_exists('success', $j)) {
             $isOk = filter_var($j['success'], FILTER_VALIDATE_BOOLEAN, FILTER_NULL_ON_FAILURE);
             if ($isOk === true) {
+                if ($type === 'x-ui_single') {
+                    return ['ok' => true, 'verified' => true, 'message' => 'ورود با یوزرنیم/پسورد موفق بود — اما در نسخه‌های جدید 3x-ui، افزودن/تمدید/حذف کاربر فقط با API Token کار می‌کند. برای اطمینان، توکن پنل را هم در فیلد «توکن API» ثبت کنید.'];
+                }
                 return ['ok' => true, 'verified' => true, 'message' => 'ورود موفق '];
             }
             
@@ -493,16 +501,22 @@ function faoxima_validate_inbound_id(string $panelUrl, string $username, string 
     }
 
     
-    if (!ctype_digit($id)) {
-        return ['ok' => false, 'message' => ' شناسه اینباند باید یک عدد صحیح باشد (مثلاً: 1 یا 3)'];
+    $requestedIds = [];
+    foreach (preg_split('/[\s,]+/', $id, -1, PREG_SPLIT_NO_EMPTY) as $part) {
+        if (!ctype_digit($part)) {
+            return ['ok' => false, 'message' => ' شناسه اینباند باید عدد صحیح باشد (یک عدد مثل 3، یا چند عدد جدا شده با ویرگول مثل 1,2,3)'];
+        }
+        $requestedIds[] = (int) $part;
     }
-    $numId = (int)$id;
+    if (empty($requestedIds)) {
+        return ['ok' => false, 'message' => ' شناسه اینباند خالی است'];
+    }
 
     
     $loginResp = faoxima_http_post(
         $url . '/login',
-        http_build_query(['username' => $username, 'password' => $password]),
-        ['Content-Type: application/x-www-form-urlencoded']
+        json_encode(['username' => $username, 'password' => $password, 'twoFactorCode' => '']),
+        ['Content-Type: application/json', 'Accept: application/json']
     );
     if (!$loginResp['ok']) return ['ok' => false, 'message' => 'اتصال به پنل ناموفق: ' . $loginResp['error']];
     $lj = json_decode($loginResp['body'], true);
@@ -574,15 +588,27 @@ function faoxima_validate_inbound_id(string $panelUrl, string $username, string 
         return ['ok' => false, 'message' => ' لیست اینباندها خالی یا نامعتبر: ' . $msg];
     }
 
+    $foundMap = [];
     foreach ($ldata['obj'] as $inbound) {
-        if (isset($inbound['id']) && (int)$inbound['id'] === $numId) {
-            $tag      = $inbound['remark'] ?? $inbound['tag'] ?? '';
-            $protocol = $inbound['protocol'] ?? '';
-            return ['ok' => true, 'message' => " اینباند #{$numId} یافت شد" . ($tag !== '' ? " — «{$tag}»" : '') . ($protocol !== '' ? " ({$protocol})" : '')];
+        if (isset($inbound['id'])) {
+            $foundMap[(int)$inbound['id']] = $inbound['remark'] ?? $inbound['tag'] ?? '';
         }
     }
-
-    return ['ok' => false, 'message' => " اینباند #{$numId} در پنل یافت نشد — لطفاً شناسهٔ صحیح اینباند را وارد کنید"];
+    $missing = [];
+    $foundLabels = [];
+    foreach ($requestedIds as $reqId) {
+        if (array_key_exists($reqId, $foundMap)) {
+            $tag = $foundMap[$reqId];
+            $foundLabels[] = "#{$reqId}" . ($tag !== '' ? " ({$tag})" : '');
+        } else {
+            $missing[] = $reqId;
+        }
+    }
+    if (!empty($missing)) {
+        return ['ok' => false, 'message' => ' اینباند(های) ' . implode(', ', $missing) . ' در پنل یافت نشد — لطفاً شناسه‌های صحیح را وارد کنید'];
+    }
+    $countLabel = count($requestedIds) > 1 ? (count($requestedIds) . ' اینباند یافت شد: ') : '';
+    return ['ok' => true, 'message' => ' ' . $countLabel . implode('، ', $foundLabels)];
 }
 
 
@@ -745,6 +771,37 @@ if (isset($_GET['ajax']) && $_GET['ajax'] === 'toggle') {
 }
 
 
+// [FEATURE] محدودیت واقعی IP هم‌زمان: بررسی زنده‌ی وضعیت fail2ban روی یک پنل x-ui/3x-ui توکنی،
+// چون اجرای واقعی limitIp روی سمت پنل به نصب/فعال بودن fail2ban وابسته است.
+if (isset($_GET['ajax']) && $_GET['ajax'] === 'fail2ban_status') {
+    header('Content-Type: application/json; charset=utf-8');
+    $id = (int)($_POST['id'] ?? 0);
+    if ($id <= 0) {
+        echo json_encode(['ok' => false, 'error' => 'bad_request']);
+        exit;
+    }
+    try {
+        $stmt = $pdo->prepare("SELECT * FROM marzban_panel WHERE id = :id LIMIT 1");
+        $stmt->execute([':id' => $id]);
+        $panelRow = $stmt->fetch(PDO::FETCH_ASSOC);
+    } catch (\Throwable $e) {
+        echo json_encode(['ok' => false, 'error' => $e->getMessage()]);
+        exit;
+    }
+    if (!$panelRow) {
+        echo json_encode(['ok' => false, 'error' => 'panel_not_found']);
+        exit;
+    }
+    if (($panelRow['type'] ?? '') !== 'x-ui_single' || !xui_panel_uses_token($panelRow)) {
+        echo json_encode(['ok' => false, 'error' => 'این قابلیت فقط برای پنل‌های ثنایی/3x-ui با حالت توکنی در دسترس است']);
+        exit;
+    }
+    $status = xui_fail2ban_status($panelRow);
+    echo json_encode($status);
+    exit;
+}
+
+
 if ($_SERVER['REQUEST_METHOD'] === 'POST') {
     $action = $_POST['_action'] ?? '';
 
@@ -900,16 +957,16 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                 $codePanel = strtolower(preg_replace('/[^a-z0-9]/i', '', $namePanel) . '_' . substr(md5(uniqid('', true)), 0, 6));
 
 
-                // [FIX] ستون on_hold_test در جدول marzban_panel به‌صورت
-                // «NOT NULL» و بدون DEFAULT تعریف شده است. این INSERT وب آن را
-                // در ستون‌ها نمی‌آورد، برای همین MySQL با خطای
-                // «Field 'on_hold_test' doesn't have a default value» افزودن
-                // پنل را رد می‌کرد. مقدار «1» همان پیش‌فرضی است که ربات تلگرام
-                // هنگام افزودن پنل ست می‌کند، پس رفتار یکسان می‌ماند.
                 $stmt = $pdo->prepare(
+                    // [FIX] ستون on_hold_test در جدول marzban_panel به‌صورت
+                    // «NOT NULL» و بدون DEFAULT تعریف شده است. این INSERT وب آن
+                    // را در ستون‌ها نمی‌آورد، برای همین MySQL با خطای
+                    // «Field 'on_hold_test' doesn't have a default value»
+                    // افزودن پنل را رد می‌کرد. مقدار «1» همان پیش‌فرضی است که
+                    // ربات تلگرام هنگام افزودن پنل ست می‌کند.
                     "INSERT INTO marzban_panel
-                     (code_panel, name_panel, status, url_panel, username_panel, password_panel, api_key, xui_api_token, type, agent, on_hold_test, version_panel)
-                     VALUES (:c, :n, :st, :u, :user, :pass, :api, :xt, :type, :agent, :onhold, :ver)"
+                     (code_panel, name_panel, status, url_panel, username_panel, password_panel, api_key, xui_api_token, type, agent, on_hold_test, version_panel, Methodextend, status_extend)
+                     VALUES (:c, :n, :st, :u, :user, :pass, :api, :xt, :type, :agent, :onhold, :ver, :mext, :sext)"
                 );
                 $stmt->execute([
                     ':c'      => $codePanel,
@@ -924,6 +981,15 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST') {
                     ':agent'  => $agent,
                     ':onhold' => '1',
                     ':ver'    => $panelVersionFlag,
+                    // [FIX] این دو ستون را INSERT وب پر نمی‌کرد و NULL می‌ماندند:
+                    //  • Methodextend خالی  → هیچ شاخه‌ای در extend() اجرا نمی‌شد،
+                    //    یعنی تمدید «موفق» گزارش می‌شد ولی حجم مصرفی ریست نمی‌شد.
+                    //  • status_extend خالی → پنلِ ادمین «خاموش» نشان می‌داد ولی
+                    //    گاردها فقط با رشته‌ی دقیقِ off_extend مطابقت می‌کردند، پس
+                    //    مشتری همچنان تمدید می‌خرید.
+                    // مقادیر زیر همان چیزی است که ربات هنگام افزودن پنل می‌گذارد.
+                    ':mext'   => 'ریست حجم و زمان',
+                    ':sext'   => 'on_extend',
                 ]);
 
                 // [FIX] برای پنل پاسارگارد، بقیه‌ی مقادیرِ پیش‌فرضِ فروشِ Marzban
@@ -1533,6 +1599,13 @@ function faoxima_is_truthy_panel_flag($v, $trueValues) {
                                     <div class="info-line">
                                         <span class="info-line__k">توکن 3x-ui:</span>
                                         <span class="info-line__v"><?php echo faoxima_mask_secret($p['xui_api_token'] ?? ''); ?> <small style="color:var(--success,#16a34a)">(حالت توکنی فعال)</small></span>
+                                    </div>
+                                    <div class="info-line">
+                                        <span class="info-line__k">fail2ban:</span>
+                                        <span class="info-line__v">
+                                            <button type="button" class="btn btn-sm btn-soft-info fail2ban-check" data-id="<?php echo (int)$p['id']; ?>">بررسی وضعیت</button>
+                                            <span class="fail2ban-result" data-id="<?php echo (int)$p['id']; ?>" style="margin-inline-start:8px; font-size:12.5px;"></span>
+                                        </span>
                                     </div>
                                     <?php endif; ?>
                                 <?php else: ?>
@@ -2211,6 +2284,43 @@ document.querySelectorAll('.panel-toggle').forEach(function (cb) {
                 }
             })
             .catch(function () { cb.disabled = false; cb.checked = !cb.checked; });
+    });
+});
+
+
+document.querySelectorAll('.fail2ban-check').forEach(function (btn) {
+    btn.addEventListener('click', function () {
+        var id = btn.dataset.id;
+        var resultEl = document.querySelector('.fail2ban-result[data-id="' + id + '"]');
+        btn.disabled = true;
+        if (resultEl) { resultEl.textContent = 'در حال بررسی...'; resultEl.style.color = ''; }
+        var fd = new FormData();
+        fd.append('id', id);
+        fetch('panels.php?ajax=fail2ban_status', { method: 'POST', body: fd, credentials: 'same-origin' })
+            .then(function (r) { return r.json(); })
+            .then(function (j) {
+                btn.disabled = false;
+                if (!resultEl) return;
+                if (!j.ok) {
+                    resultEl.textContent = 'خطا: ' + (j.error || 'unknown');
+                    resultEl.style.color = 'var(--danger,#dc2626)';
+                    return;
+                }
+                if (j.usable) {
+                    resultEl.textContent = '✅ فعال و قابل استفاده';
+                    resultEl.style.color = 'var(--success,#16a34a)';
+                } else if (j.installed) {
+                    resultEl.textContent = '⚠️ نصب شده ولی غیرفعال/غیرقابل‌استفاده';
+                    resultEl.style.color = 'var(--warning,#d97706)';
+                } else {
+                    resultEl.textContent = '❌ نصب نشده';
+                    resultEl.style.color = 'var(--danger,#dc2626)';
+                }
+            })
+            .catch(function () {
+                btn.disabled = false;
+                if (resultEl) { resultEl.textContent = 'خطا در ارتباط'; resultEl.style.color = 'var(--danger,#dc2626)'; }
+            });
     });
 });
 

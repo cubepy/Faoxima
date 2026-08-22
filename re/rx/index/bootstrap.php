@@ -1657,7 +1657,12 @@ $nameconfig";
             unset($keyboarddate['change-location']);
             unset($keyboarddate['changelink']);
         }
-        if ($marzban['status_extend'] == "off_extend") {
+        // [FIX فروشِ تمدیدِ خاموش] نمایشِ پنلِ ادمین مقدارِ NULL را «خاموش» نشان
+        // می‌داد، ولی این شرط فقط با رشته‌ی دقیقِ off_extend مطابقت می‌کرد و
+        // NULL از کنارش رد می‌شد. پنل‌هایی که از پنلِ وب اضافه شده‌اند این ستون
+        // را NULL دارند، پس ادمین «خاموش» می‌دید ولی مشتری همچنان تمدید
+        // می‌خرید و پول می‌داد. حالا فقط on_extendِ صریح یعنی روشن.
+        if (($marzban['status_extend'] ?? '') !== "on_extend") {
             unset($keyboarddate['Extra_time']);
             unset($keyboarddate['Extra_volume']);
             unset($keyboarddate['extend']);
@@ -2246,7 +2251,12 @@ $textconnect
     }
     if (function_exists('nmStopIfServicePanelBlocked') && nmStopIfServicePanelBlocked($nameloc, $from_id, null)) return;
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
-    if ($marzban_list_get['status_extend'] == "off_extend") {
+    // [FIX فروشِ تمدیدِ خاموش] نمایشِ پنلِ ادمین مقدارِ NULL را «خاموش» نشان
+        // می‌داد، ولی این شرط فقط با رشته‌ی دقیقِ off_extend مطابقت می‌کرد و
+        // NULL از کنارش رد می‌شد. پنل‌هایی که از پنلِ وب اضافه شده‌اند این ستون
+        // را NULL دارند، پس ادمین «خاموش» می‌دید ولی مشتری همچنان تمدید
+        // می‌خرید و پول می‌داد. حالا فقط on_extendِ صریح یعنی روشن.
+        if (($marzban_list_get['status_extend'] ?? '') !== "on_extend") {
         sendmessage($from_id, "❌ امکان تمدید در این پنل وجود ندارد", null, 'html');
         return;
     }
@@ -2637,7 +2647,12 @@ $textconnect
         return;
     }
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
-    if ($marzban_list_get['status_extend'] == "off_extend") {
+    // [FIX فروشِ تمدیدِ خاموش] نمایشِ پنلِ ادمین مقدارِ NULL را «خاموش» نشان
+        // می‌داد، ولی این شرط فقط با رشته‌ی دقیقِ off_extend مطابقت می‌کرد و
+        // NULL از کنارش رد می‌شد. پنل‌هایی که از پنلِ وب اضافه شده‌اند این ستون
+        // را NULL دارند، پس ادمین «خاموش» می‌دید ولی مشتری همچنان تمدید
+        // می‌خرید و پول می‌داد. حالا فقط on_extendِ صریح یعنی روشن.
+        if (($marzban_list_get['status_extend'] ?? '') !== "on_extend") {
         sendmessage($from_id, "❌ امکان تمدید در این پنل وجود ندارد", null, 'html');
         return;
     }
@@ -2978,7 +2993,12 @@ $textconnect
     }
     if (function_exists('nmStopIfServicePanelBlocked') && nmStopIfServicePanelBlocked($nameloc, $from_id, null)) return;
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
-    if ($marzban_list_get['status_extend'] == "off_extend") {
+    // [FIX فروشِ تمدیدِ خاموش] نمایشِ پنلِ ادمین مقدارِ NULL را «خاموش» نشان
+        // می‌داد، ولی این شرط فقط با رشته‌ی دقیقِ off_extend مطابقت می‌کرد و
+        // NULL از کنارش رد می‌شد. پنل‌هایی که از پنلِ وب اضافه شده‌اند این ستون
+        // را NULL دارند، پس ادمین «خاموش» می‌دید ولی مشتری همچنان تمدید
+        // می‌خرید و پول می‌داد. حالا فقط on_extendِ صریح یعنی روشن.
+        if (($marzban_list_get['status_extend'] ?? '') !== "on_extend") {
         sendmessage($from_id, "❌ امکان خرید حجم اضافه در این پنل وجود ندارد", null, 'html');
         return;
     }
@@ -3690,7 +3710,12 @@ $textconnect
         return;
     }
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
-    if ($marzban_list_get['status_extend'] == "off_extend") {
+    // [FIX فروشِ تمدیدِ خاموش] نمایشِ پنلِ ادمین مقدارِ NULL را «خاموش» نشان
+        // می‌داد، ولی این شرط فقط با رشته‌ی دقیقِ off_extend مطابقت می‌کرد و
+        // NULL از کنارش رد می‌شد. پنل‌هایی که از پنلِ وب اضافه شده‌اند این ستون
+        // را NULL دارند، پس ادمین «خاموش» می‌دید ولی مشتری همچنان تمدید
+        // می‌خرید و پول می‌داد. حالا فقط on_extendِ صریح یعنی روشن.
+        if (($marzban_list_get['status_extend'] ?? '') !== "on_extend") {
         sendmessage($from_id, "❌ امکان خرید زمان اضافه در این پنل وجود ندارد", null, 'html');
         return;
     }

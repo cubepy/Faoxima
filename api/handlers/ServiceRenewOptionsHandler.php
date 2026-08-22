@@ -35,7 +35,7 @@ final class ServiceRenewOptionsHandler extends BaseHandler
         if (empty($panel)) {
             FaoximaResponse::notFound('Panel not found');
         }
-        if (($panel['status_extend'] ?? '') === 'off_extend') {
+        if (($panel['status_extend'] ?? '') !== 'on_extend') {
             FaoximaResponse::fail(409, '❌ امکان تمدید در این پنل وجود ندارد');
         }
 

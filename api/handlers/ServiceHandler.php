@@ -391,7 +391,7 @@ final class ServiceHandler extends BaseHandler
         $statusNameCustom       = (string)($this->setting['statusnamecustom'] ?? 'offnamecustom');
 
         $panelType   = (string)($panel['type'] ?? '');
-        $panelExtend = (string)($panel['status_extend'] ?? 'on_extend');
+        $panelExtend = (string)($panel['status_extend'] ?? '');   // [FIX] نبودِ مقدار یعنی خاموش، نه روشن
         $panelChloc  = (string)($panel['changeloc'] ?? 'onchangeloc');
 
         $panelCount = (int) FaoximaDb::fetchScalar(

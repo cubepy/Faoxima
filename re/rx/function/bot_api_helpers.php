@@ -107,7 +107,13 @@ function addFieldToTable($tableName, $fieldName, $defaultValue = null, $datatype
 function outtypepanel($typepanel, $message)
 {
     global $from_id, $optionMarzban, $optionGuard, $optionX_ui_single, $optionhiddfy, $optionalireza, $optionalireza_single, $optionmarzneshin, $option_mikrotik, $optionwg, $options_ui, $optioneylanpanel, $optionibsng;
-    if ($typepanel == "marzban") {
+    // [FIX «هیچ اتفاقی نمی‌افتد»] پاسارگاد اینجا شاخه نداشت، پس هر تنظیمی که در
+    // منوی «مدیریت پنل» ذخیره می‌شد (روش تمدید، روش ساخت نام کاربری، محدودیت
+    // اکانت و ...) هیچ پیامِ تاییدی نمی‌گرفت و ادمین فکر می‌کرد دکمه کار نمی‌کند.
+    // بدتر از آن: چون بازخوردی نبود، ستون‌هایی مثل Methodextend روی پنل‌هایی که
+    // از پنلِ وب اضافه شده‌اند خالی می‌ماندند و تمدید عملاً بی‌اثر می‌شد.
+    // پاسارگاد از همان کیبورد مدیریتِ Marzban استفاده می‌کند.
+    if ($typepanel == "marzban" || $typepanel == "pasargard") {
         sendmessage($from_id, $message, $optionMarzban, 'HTML');
     } elseif ($typepanel == "guard") {
         sendmessage($from_id, $message, $optionGuard, 'HTML');
@@ -241,9 +247,27 @@ function addBackgroundImage($urlimage, $qrCodeResult, $backgroundPath)
 
         imagecopy($glass, $backgroundImage, 0, 0, $boxClipX, $boxClipY, $boxClipW, $boxClipH);
 
-        for ($i = 0; $i < 22; $i++) {
+        if (function_exists('cubepay_log')) cubepay_log('BG: blur start', ['box' => $boxClipW . 'x' . $boxClipH]);
+        // [PERF FIX] این حلقه قبلاً ۲۲ بار گاوسین‌بلور می‌زد — سنگین‌ترین فیلترِ
+        // GD، ده‌ها ثانیه CPU روی هاستِ اشتراکی. واچ‌داگِ هاست وسطِ همین حلقه
+        // پروسه را می‌کُشت و تحویلِ سرویس (پیام، کسر کیف پول، گزارش کانال)
+        // نیمه‌کاره می‌ماند. همان محو‌شدگی با هزینه‌ی ~۱٪: تصویر را کوچک کن،
+        // دو بلور بزن، بزرگش کن — کوچک‌نمایی خودش بهترین بلور است.
+        $blurScale = 6;
+        $smallW = max(1, (int) ($boxClipW / $blurScale));
+        $smallH = max(1, (int) ($boxClipH / $blurScale));
+        $smallGlass = imagecreatetruecolor($smallW, $smallH);
+        if ($smallGlass !== false) {
+            imagecopyresampled($smallGlass, $glass, 0, 0, 0, 0, $smallW, $smallH, $boxClipW, $boxClipH);
+            @imagefilter($smallGlass, IMG_FILTER_GAUSSIAN_BLUR);
+            @imagefilter($smallGlass, IMG_FILTER_GAUSSIAN_BLUR);
+            imagecopyresampled($glass, $smallGlass, 0, 0, 0, 0, $boxClipW, $boxClipH, $smallW, $smallH);
+            imagedestroy($smallGlass);
+        } else {
+            @imagefilter($glass, IMG_FILTER_GAUSSIAN_BLUR);
             @imagefilter($glass, IMG_FILTER_GAUSSIAN_BLUR);
         }
+        if (function_exists('cubepay_log')) cubepay_log('BG: blur done');
 
         $totalLum = 0;
         $samples  = 5;

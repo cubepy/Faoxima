@@ -2241,6 +2241,29 @@ class ManagePanel
         }
         update("invoice", 'uuid', null, "username", $username);
         update("invoice", 'Status', "active", "username", $username);
+        // [FIX تمدیدِ بی‌اثر] این زنجیره هیچ شاخه‌ی else نداشت. اگر ستون
+        // Methodextend خالی یا مقدارِ ناشناخته باشد، هیچ‌کدام از شاخه‌ها اجرا
+        // نمی‌شد: نه ریستِ حجم انجام می‌شد نه حجمِ قبلی اضافه — فقط تاریخِ انقضا
+        // جلو می‌رفت. یعنی تمدید «موفق» گزارش می‌شد ولی سرویس همچنان
+        // «پایان حجم» می‌ماند، چون حجمِ مصرفی دست‌نخورده باقی می‌ماند.
+        // پنل‌هایی که از پنلِ وب اضافه شده‌اند دقیقاً همین وضعیت را دارند:
+        // دستور INSERT وب این ستون را پر نمی‌کند و NULL می‌ماند.
+        // پیش‌فرض را همانی می‌گذاریم که خودِ ربات هنگام افزودن پنل ست می‌کند.
+        $rxKnownExtend = [
+            "ریست حجم و زمان",
+            "اضافه شدن زمان و حجم به ماه بعد",
+            "ریست زمان و اضافه کردن حجم قبلی",
+            "ریست شدن حجم و اضافه شدن زمان",
+            "اضافه شدن زمان و تبدیل حجم کل به حجم باقی مانده",
+        ];
+        $Method_extend = trim((string) $Method_extend);
+        if (!in_array($Method_extend, $rxKnownExtend, true)) {
+            error_log('[panels] extend: Methodextend خالی/ناشناخته («' . $Method_extend
+                . '») برای پنل ' . (string) ($panel['name_panel'] ?? '?')
+                . ' — پیش‌فرضِ «ریست حجم و زمان» اعمال شد');
+            $Method_extend = "ریست حجم و زمان";
+        }
+
         if ($Method_extend == "ریست حجم و زمان") {
             $reset = $this->ResetUserDataUsage($username, $panel['name_panel']);
             if ($reset['status'] == false) {
@@ -2481,6 +2504,47 @@ class ManagePanel
                 'msg' => $extend['msg']
             );
         }
+
+        // [FIX تمدیدِ «موفقِ» بی‌اثر]
+        // پنل می‌تواند به PUT پاسخ ۲۰۰ بدهد ولی عملاً چیزی را عوض نکند (مثلاً
+        // فیلدی که نمی‌شناسد را بی‌صدا نادیده بگیرد). آن‌وقت ربات «تمدید موفق»
+        // می‌گفت، پول کم می‌شد، و سرویس همچنان «پایان حجم» می‌ماند.
+        // پس نتیجه را از خودِ پنل می‌خوانیم و تایید می‌کنیم.
+        //
+        // محافظه‌کارانه: اگر خواندنِ تایید به هر دلیلی نشد، تمدید را «موفق»
+        // می‌گذاریم (نمی‌خواهیم یک خطای شبکه‌ی گذرا، تمدیدِ واقعاً انجام‌شده را
+        // ناموفق اعلام کند). فقط وقتی خطا می‌دهیم که پنل صریحاً بگوید چیزی
+        // عوض نشده.
+        if (in_array($panel['type'], ["marzban", "pasargard"], true)) {
+            $rxWasReset = in_array($Method_extend, [
+                "ریست حجم و زمان",
+                "ریست شدن حجم و اضافه شدن زمان",
+            ], true);
+            $rxAfter = $this->DataUser($panel['name_panel'], $username);
+            if (is_array($rxAfter) && (($rxAfter['status'] ?? '') !== 'Unsuccessful')) {
+                $rxUsed  = isset($rxAfter['used_traffic']) ? (float) $rxAfter['used_traffic'] : null;
+                $rxLimit = isset($rxAfter['data_limit'])   ? (float) $rxAfter['data_limit']   : null;
+
+                // اگر قرار بوده حجم ریست شود ولی مصرف هنوز از سقف بیشتر است،
+                // یعنی روی پنل هیچ اتفاقی نیفتاده.
+                if ($rxWasReset && $rxUsed !== null && $rxLimit !== null
+                    && $rxLimit > 0 && $rxUsed >= $rxLimit) {
+                    error_log('[panels] extend verify FAILED for ' . $username
+                        . ' on ' . (string) $panel['name_panel']
+                        . ' — used=' . $rxUsed . ' limit=' . $rxLimit
+                        . ' method=' . $Method_extend
+                        . ' payload=' . json_encode($data, JSON_UNESCAPED_UNICODE));
+                    return array(
+                        'status' => false,
+                        'msg' => 'پنل تمدید را اعمال نکرد (حجم مصرفی ریست نشد). لطفاً روش تمدید و تنظیمات پنل را بررسی کنید.'
+                    );
+                }
+            } else {
+                error_log('[panels] extend verify skipped for ' . $username
+                    . ' on ' . (string) $panel['name_panel'] . ' — could not read back');
+            }
+        }
+
         return $extend;
     }
     function extra_volume($username_account, $code_panel, $limit_volume_new)
