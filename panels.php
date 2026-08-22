@@ -22,6 +22,20 @@ class ManagePanel
     private static $panelRowCache = [];
 
 
+    // [FIX تمدیدِ موفقِ دروغین] چک‌های پنل فقط status == 500 را «خطا» می‌دیدند.
+    // پنل برای payloadِ نادرست 422، برای توکنِ منقضی 401 و برای مسیرِ اشتباه 404
+    // برمی‌گرداند — همه‌ی این‌ها از کنار آن شرط رد می‌شدند و «موفق» گزارش می‌شدند:
+    // پول کم می‌شد، فاکتور تمدید می‌شد، و روی پنل هیچ اتفاقی نمی‌افتاد.
+    private static function rx_http_failed($response): ?string
+    {
+        if (!is_array($response)) return null;
+        $code = $response['status'] ?? null;
+        if (!is_numeric($code)) return null;   // بعضی درایورها اینجا bool می‌گذارند
+        $code = (int) $code;
+        if ($code < 100 || ($code >= 200 && $code < 300)) return null;
+        return 'HTTP ' . $code;
+    }
+
     private function loadPanel(string $key, string $column = 'name_panel'): ?array
     {
         $cacheKey = $column . '|' . $key;
@@ -88,10 +102,13 @@ class ManagePanel
         if (in_array($Get_Data_Panel['type'], ["marzban", "pasargard"], true)) {
 
             $ConnectToPanel = adduser($Get_Data_Panel['name_panel'], $data_limit, $usernameC, $expire, $note, $Get_Data_Product['data_limit_reset'], $Get_Data_Product['name_product']);
-            if (!empty($ConnectToPanel['status']) && $ConnectToPanel['status'] == 500) {
+            // [FIX] فقط ۵۰۰ «خطا» حساب می‌شد. پنل برای توکنِ منقضی 401، برای
+            // payloadِ نادرست 422 و برای نامِ تکراری 409 می‌دهد — همه‌ی این‌ها
+            // «موفق» رد می‌شدند و سرویسِ ساخته‌نشده به مشتری فروخته می‌شد.
+            if (self::rx_http_failed($ConnectToPanel) !== null) {
                 return array(
                     'status' => 'Unsuccessful',
-                    'msg' => $ConnectToPanel['status']
+                    'msg' => self::rx_http_failed($ConnectToPanel)
                 );
             }
             if (!empty($ConnectToPanel['error'])) {
@@ -130,10 +147,13 @@ class ManagePanel
         } elseif ($Get_Data_Panel['type'] == "marzneshin") {
 
             $ConnectToPanel = adduserm($Get_Data_Panel['name_panel'], $data_limit, $usernameC, $expire, $Get_Data_Product['name_product'], $note, $Get_Data_Product['data_limit_reset']);
-            if (!empty($ConnectToPanel['status']) && $ConnectToPanel['status'] == 500) {
+            // [FIX] فقط ۵۰۰ «خطا» حساب می‌شد. پنل برای توکنِ منقضی 401، برای
+            // payloadِ نادرست 422 و برای نامِ تکراری 409 می‌دهد — همه‌ی این‌ها
+            // «موفق» رد می‌شدند و سرویسِ ساخته‌نشده به مشتری فروخته می‌شد.
+            if (self::rx_http_failed($ConnectToPanel) !== null) {
                 return array(
                     'status' => 'Unsuccessful',
-                    'msg' => $ConnectToPanel['status']
+                    'msg' => self::rx_http_failed($ConnectToPanel)
                 );
             }
             if (!empty($ConnectToPanel['error'])) {
@@ -1612,7 +1632,12 @@ class ManagePanel
             );
         }
         if (in_array($Get_Data_Panel['type'], ["marzban", "pasargard"], true)) {
-            if ((string)($Get_Data_Panel['version_panel'] ?? '0') === '1') {
+            // پنل پاسارگاد همیشه از payloadِ نسخه‌ی جدید استفاده می‌کند، حتی اگر
+            // ستون version_panel رویش '0' مانده باشد (پنل‌هایی که قبلاً از پنل وب
+            // اضافه شده‌اند دقیقاً همین وضعیت را دارند). بدون این، proxy_settings
+            // دوباره تزریق نمی‌شد و PUT ناقص می‌رفت.
+            if ((string)($Get_Data_Panel['version_panel'] ?? '0') === '1'
+                || $Get_Data_Panel['type'] === 'pasargard') {
                 $result = getuser($username, $name_panel);
                 if (!empty($result['body'])) {
                     $result = json_decode($result['body'], true);
@@ -1627,10 +1652,10 @@ class ManagePanel
                     'status' => false,
                     'msg' => $modify['error']
                 );
-            } elseif (!empty($modify['status']) && $modify['status'] == 500) {
+            } elseif (self::rx_http_failed($modify) !== null) {
                 return array(
                     'status' => false,
-                    'msg' => 'error code : ' . $modify['status']
+                    'msg' => 'error code : ' . self::rx_http_failed($modify)
                 );
             }
             $modifycheck = json_decode($modify['body'], true);
@@ -1652,10 +1677,10 @@ class ManagePanel
                     'status' => false,
                     'msg' => $modify['error']
                 );
-            } elseif (!empty($modify['status']) && $modify['status'] == 500) {
+            } elseif (self::rx_http_failed($modify) !== null) {
                 return array(
                     'status' => false,
-                    'msg' => 'error code : ' . $modify['status']
+                    'msg' => 'error code : ' . self::rx_http_failed($modify)
                 );
             }
             $modifycheck = json_decode($modify['body'], true);
@@ -2251,7 +2276,7 @@ class ManagePanel
             $data_limit_last = $data_limit_last < 0 ? 0 : $data_limit_last;
             $data_limit_new = $data_limit_new + $data_limit_last;
         }
-        if (in_array($panel['type'], ["marzban", "pasargard"], true)) {
+        if ($panel['type'] == "marzban") {
             $data = array(
                 'data_limit' => $data_limit_new,
                 'expire' => $time_new,
@@ -2259,6 +2284,39 @@ class ManagePanel
             );
             if ($invoice != false && $invoice['uuid'] != null) {
                 $data['proxies'] = json_decode($invoice['uuid'], true);
+            }
+        } elseif ($panel['type'] == "pasargard") {
+            // [FIX تمدیدِ بی‌اثر روی پاسارگاد]
+            // پاسارگاد (PasarGuard) برای ویرایشِ کاربر نام‌فیلدهای دیگری دارد:
+            // group_ids / proxy_settings — نه inbounds / proxies. قبلاً همان
+            // payloadِ Marzban فرستاده می‌شد، پنل ردش می‌کرد، و چون چکِ خطا فقط
+            // status == 500 را می‌دید، نتیجه «موفق» گزارش می‌شد: مبلغ کم می‌شد،
+            // فاکتور در ربات تمدید می‌شد، ولی روی پنل هیچ چیز عوض نمی‌شد —
+            // سرویس همچنان «پایان حجم» می‌ماند. (proxy_settings را خودِ
+            // Modifyuser بالاتر زنده می‌خواند و تزریق می‌کند.)
+            $data = array(
+                'data_limit' => $data_limit_new,
+                'expire' => $time_new,
+            );
+            // عضویتِ واقعیِ کاربر را زنده می‌خوانیم و همان را برمی‌گردانیم.
+            // اگر group_ids را حذف کنیم، بسته به نسخه‌ی پنل ممکن است عضویتش
+            // پاک شود و کانفیگ‌هایش از کار بیفتد؛ و اگر گروه‌های پیش‌فرضِ پنل را
+            // بفرستیم، کاربری که دستی در گروهِ دیگری گذاشته شده جابه‌جا می‌شود.
+            // پس اگر خواندن شکست خورد، عمداً حدس نمی‌زنیم و فیلد را نمی‌فرستیم.
+            $rxLiveGroups = null;
+            $rxLiveUser = getuser($username, $panel['name_panel']);
+            if (empty($rxLiveUser['error']) && !empty($rxLiveUser['body'])) {
+                $rxLiveDecoded = json_decode((string) $rxLiveUser['body'], true);
+                if (is_array($rxLiveDecoded) && isset($rxLiveDecoded['group_ids']) && is_array($rxLiveDecoded['group_ids'])) {
+                    $rxLiveGroups = array_values(array_map('intval', $rxLiveDecoded['group_ids']));
+                }
+            }
+            if (is_array($rxLiveGroups) && $rxLiveGroups !== []) {
+                $data['group_ids'] = $rxLiveGroups;
+            } else {
+                error_log('[panels] pasargard renew: could not read live group_ids for '
+                    . $username . ' on ' . (string) $panel['name_panel']
+                    . ' — omitting group_ids rather than guessing');
             }
         } elseif ($panel['type'] == "marzneshin") {
             $expire_strotegy = $time_new == 0 ? "never" : "fixed_date";
