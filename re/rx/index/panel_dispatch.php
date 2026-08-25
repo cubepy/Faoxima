@@ -55,8 +55,11 @@ if (preg_match('/Confirmpay_user_(\w+)_(\w+)/', $datain, $dataget)) {
         $pricecashback = select("PaySetting", "ValuePay", "NamePay", "chashbackiranpay2", "select")['ValuePay'];
         if ($pricecashback != "0") {
             $result = ($Payment_report['price'] * $pricecashback) / 100;
+            // [FIX واریزِ گم‌شده] مقدارِ مطلق نوشته می‌شد؛ اگر بین خواندن و نوشتن
+    // واریزِ دیگری می‌رسید (کرون، وب‌هوک، ادمینِ دوم) پاک می‌شد. افزایشِ اتمیک.
+    // ضمناً قبلاً روی $user['id'] نوشته می‌شد، نه پرداخت‌کننده.
+            balance_atomic_credit($Balance_id['id'], (float) $result);
             $Balance_confrim = intval($Balance_id['Balance']) + $result;
-            update("user", "Balance", $Balance_confrim, "id", $user['id']);
             $pricecashback = number_format($pricecashback);
             $text_report = sprintf($textbotlang['users']['Discount']['gift-deposit'], $result);
             sendmessage($from_id, $text_report, null, 'HTML');
@@ -798,8 +801,10 @@ if (preg_match('/^sendresidcart-(.*)/', $datain, $dataget)) {
     $stmt->bindParam(':code', $text);
     $stmt->execute();
     $get_codesql = $stmt->fetch(PDO::FETCH_ASSOC);
-    $balance_user = $user['Balance'] + $get_codesql['price'];
-    update("user", "Balance", $balance_user, "id", $from_id);
+    // [FIX واریزِ گم‌شده] مقدارِ مطلق نوشته می‌شد؛ اگر بین خواندن و نوشتن
+    // واریزِ دیگری می‌رسید (کرون، وب‌هوک، ادمینِ دوم) پاک می‌شد. افزایشِ اتمیک.
+    balance_atomic_credit($from_id, (float) $get_codesql['price']);
+    $balance_user = (float) $user['Balance'] + (float) $get_codesql['price'];
     $discountlimitadd = intval($checklimit['limitused']) + 1;
     update("Discount", "limitused", $discountlimitadd, "code", $text);
     step('home', $from_id);
@@ -936,10 +941,12 @@ $text_porsant
     $price_gift_Start = select("affiliates", "*", null, null, "select");
     $price_gift_Start = intval($price_gift_Start['price_Discount']) / 2;
     $useraffiliates = select("user", "*", 'id', $reagent['reagent'], "select");
-    $Balance_add_regent = $useraffiliates['Balance'] + $price_gift_Start;
-    update("user", "Balance", $Balance_add_regent, "id", $reagent['reagent']);
-    $Balance_add_user = $user['Balance'] + $price_gift_Start;
-    update("user", "Balance", $Balance_add_user, "id", $from_id);
+    // [FIX واریزِ گم‌شده] مقدارِ مطلق نوشته می‌شد؛ اگر بین خواندن و نوشتن
+    // واریزِ دیگری می‌رسید (کرون، وب‌هوک، ادمینِ دوم) پاک می‌شد. افزایشِ اتمیک.
+    balance_atomic_credit($reagent['reagent'], (float) $price_gift_Start);
+    balance_atomic_credit($from_id, (float) $price_gift_Start);
+    $Balance_add_regent = (float) $useraffiliates['Balance'] + (float) $price_gift_Start;
+    $Balance_add_user   = (float) $user['Balance'] + (float) $price_gift_Start;
     $addbalancediscount = number_format($price_gift_Start, 0);
     sendmessage($reagent['reagent'], "🎉 یک نفر با معرفی شما وارد شد! هدیه به حساب شما واریز شد.", null, 'html');
     sendmessage($from_id, "🎉 هدیه عضویت برای شما فعال شد!", null, 'html');

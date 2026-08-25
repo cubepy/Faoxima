@@ -793,8 +793,10 @@ if ($user['joinchannel'] != "active") {
                 $useraffiliates = select("user", "*", 'id', $affiliatesid, "select");
                 if ($marzbanDiscountaffiliates['Discount'] == "onDiscountaffiliates") {
                     $marzbanDiscountaffiliates = select("affiliates", "*", null, null, "select");
-                    $Balance_add_user = $useraffiliates['Balance'] + $marzbanDiscountaffiliates['price_Discount'];
-                    update("user", "Balance", $Balance_add_user, "id", $affiliatesid);
+                    // [FIX واریزِ گم‌شده] مقدارِ مطلق نوشته می‌شد؛ اگر بین خواندن و نوشتن
+    // واریزِ دیگری می‌رسید (کرون، وب‌هوک، ادمینِ دوم) پاک می‌شد. افزایشِ اتمیک.
+    balance_atomic_credit($affiliatesid, (float) $marzbanDiscountaffiliates['price_Discount']);
+                    $Balance_add_user = (float) $useraffiliates['Balance'] + (float) $marzbanDiscountaffiliates['price_Discount'];
                     $addbalancediscount = number_format($marzbanDiscountaffiliates['price_Discount'], 0);
                     sendmessage($affiliatesid, "🎁 مبلغ $addbalancediscount به موجودی شما از طرف زیر مجموعه با شناسه کاربری $from_id اضافه گردید.", null, 'html');
                 }

@@ -416,7 +416,13 @@ if (!function_exists('cm_apply_payment')) {
         $oldBalance = is_array($userRow) ? (int) ($userRow['Balance'] ?? 0) : 0;
         $newBalance = $oldBalance + $finalIrr;
         if (function_exists('update')) {
-            update('user', 'Balance', $newBalance, 'id', $payment['id_user']);
+            // [FIX واریزِ گم‌شده] مقدارِ مطلق نوشته می‌شد؛ اگر بین خواندن و نوشتن
+            // واریزِ دیگری می‌رسید پاک می‌شد. $newBalance فقط برای متنِ پیام می‌ماند.
+            if (function_exists('balance_atomic_credit')) {
+                balance_atomic_credit($payment['id_user'], (float) $finalIrr);
+            } else {
+                update('user', 'Balance', $newBalance, 'id', $payment['id_user']);
+            }
             update('Payment_report', 'payment_Status', 'paid', 'id_order', $orderId);
             update('Payment_report', 'at_updated', date('Y/m/d H:i:s'), 'id_order', $orderId);
         }

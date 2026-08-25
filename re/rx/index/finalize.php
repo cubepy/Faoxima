@@ -16,17 +16,25 @@ if (isset($update['pre_checkout_query'])) {
         return;
     }
     update("Payment_report", "dec_not_confirmed", json_encode($update['pre_checkout_query']), "id_order", $Payment_report['id_order']);
-    DirectPayment($Payment_report['id_order']);
+    // [FIX] was calling DirectPayment() directly for Telegram Stars payments too — same silent
+    // failure risk as every other gateway (see lib/SafeDirectPayment.php for the full story).
+    if (function_exists('nm_safe_direct_payment')) {
+        nm_safe_direct_payment($Payment_report['id_order']);
+    } else {
+        DirectPayment($Payment_report['id_order']);
+    }
     $pricecashback = select("PaySetting", "ValuePay", "NamePay", "chashbackstar", "select")['ValuePay'];
     $Balance_id = select("user", "*", "id", $Payment_report['id_user'], "select");
     if ($pricecashback != "0") {
         $result = ($Payment_report['price'] * $pricecashback) / 100;
+        // [FIX واریزِ گم‌شده] این کش‌بک بلافاصله بعد از واریزِ خودِ پرداخت اجرا
+        // می‌شود؛ نوشتنِ مقدارِ مطلق می‌توانست همان واریز را بازنویسی کند.
+        balance_atomic_credit($Balance_id['id'], (float) $result);
         $Balance_confrim = intval($Balance_id['Balance']) + $result;
-        update("user", "Balance", $Balance_confrim, "id", $Balance_id['id']);
         $text_report = sprintf($textbotlang['users']['Discount']['gift-deposit'], $result);
         sendmessage($Balance_id['id'], $text_report, null, 'HTML');
     }
-    if (strlen($setting['Channel_Report'] ?? '') > 0) {
+    if (reportChannelIsSet($setting)) {
         telegram('sendmessage', [
             'chat_id' => $setting['Channel_Report'],
             'message_thread_id' => $paymentreports,
@@ -273,7 +281,7 @@ if (isset($update['pre_checkout_query'])) {
         نام کاربری سرویس : $usernamePanelExtends
         دلیل خطا : {$extend['msg']}";
         sendmessage($from_id, "❌خطایی در تمدید سرویس رخ داده با پشتیبانی در ارتباط باشید", null, 'HTML');
-        if (strlen($setting['Channel_Report'] ?? '') > 0) {
+        if (reportChannelIsSet($setting)) {
             telegram('sendmessage', [
                 'chat_id' => $setting['Channel_Report'],
                 'message_thread_id' => $errorreport,
@@ -323,7 +331,7 @@ if (isset($update['pre_checkout_query'])) {
     sendmessage($from_id, $textextend, $keyboard, 'HTML');
     $timejalali = jdate('Y/m/d H:i:s');
     $text_report = sprintf($textbotlang['Admin']['reportgroup']['renewaldetails'], $from_id, $username, $usernamePanelExtends, $first_name, $marzban_list_get['name_panel'], $prodcut['name_product'], $prodcut['Volume_constraint'], $prodcut['Service_time'], $prodcut['price_product'], $balanceformatsell, $timejalali);
-    if (strlen($setting['Channel_Report'] ?? '') > 0) {
+    if (reportChannelIsSet($setting)) {
         telegram('sendmessage', [
             'chat_id' => $setting['Channel_Report'],
             'message_thread_id' => $otherservice,

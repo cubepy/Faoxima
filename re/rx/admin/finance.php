@@ -1408,8 +1408,10 @@ $iduser  در ربات  رفع مسدود گردید
     $ManagePanel->RemoveUser($info_product['Service_location'], $info_product['username']);
     update('invoice', 'status', 'removebyadmin', 'id_invoice', $username);
     $Balance_user = select("user", "*", "id", $info_product['id_user'], "select");
-    $Balance_add_user = $Balance_user['Balance'] + $info_product['price_product'];
-    update("user", "Balance", $Balance_add_user, "id", $info_product['id_user']);
+    // [FIX واریزِ گم‌شده] مقدارِ مطلق نوشته می‌شد؛ اگر بین خواندن و نوشتن
+    // واریزِ دیگری می‌رسید (کرون، وب‌هوک، ادمینِ دوم) پاک می‌شد. افزایشِ اتمیک.
+    balance_atomic_credit($info_product['id_user'], (float) $info_product['price_product']);
+    $Balance_add_user = (float) $Balance_user['Balance'] + (float) $info_product['price_product'];
     $textadd = "💎 کاربر عزیز مبلغ {$info_product['price_product']} تومان به موجودی کیف پول تان اضافه گردید.";
     sendmessage($info_product['id_user'], $textadd, null, 'HTML');
     nm_adminInstantReply($from_id, $textbotlang['Admin']['ManageUser']['RemovedService'], $keyboardadmin, 'HTML');
@@ -1666,9 +1668,11 @@ $iduser  در ربات  رفع مسدود گردید
     nm_adminInstantReply($from_id, $textbotlang['Admin']['Balance']['AddBalanceUser'], $keyboardadmin, 'HTML');
     $Payment_report = select("Payment_report", "*", "id_order", $user['Processing_value'], "select");
     $Balance_user = select("user", "*", "id", $Payment_report['id_user'], "select");
-    $Balance_add_user = $Balance_user['Balance'] + $text;
+    // [FIX واریزِ گم‌شده] مقدارِ مطلق نوشته می‌شد؛ اگر بین خواندن و نوشتن
+    // واریزِ دیگری می‌رسید (کرون، وب‌هوک، ادمینِ دوم) پاک می‌شد. افزایشِ اتمیک.
+    balance_atomic_credit($Payment_report['id_user'], (float) $text);
+    $Balance_add_user = (float) $Balance_user['Balance'] + (float) $text;
     $balanceusers = number_format($text, 0);
-    update("user", "Balance", $Balance_add_user, "id", $Payment_report['id_user']);
     $textadd = "💎 کاربر عزیز مبلغ $balanceusers تومان به موجودی کیف پول تان اضافه گردید.";
     sendmessage($Payment_report['id_user'], $textadd, null, 'HTML');
     $text_report = "تایید رسید کارت به کارت و افزایش دستی موجودی توسط ادمین
