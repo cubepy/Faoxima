@@ -2795,6 +2795,35 @@ $textconnect
         update("invoice", "name_product", $prodcut['name_product'], "id_invoice", $nameloc['id_invoice']);
         update("invoice", "price_product", $prodcut['price_product'], "id_invoice", $nameloc['id_invoice']);
     }
+    // [FIX تمدیدِ رایگان] بررسیِ موجودیِ بالاتر روی $user انجام می‌شود که در
+    // ابتدای درخواست خوانده شده. اگر کاربر دوبار پشتِ‌هم بزند، درخواستِ دوم با
+    // موجودیِ کهنه از آن شرط رد می‌شود، پنل تمدید می‌کند و بعد کسرِ اتمیک
+    // ناموفق می‌ماند یعنی تمدیدِ رایگان. اینجا موجودی را تازه از دیتابیس
+    // می‌خوانیم و پیش از دست‌زدن به پنل، درخواست را رد می‌کنیم.
+    if (intval($pricelastextend) > 0 && ($user['agent'] ?? '') !== 'n2') {
+        try {
+            $__rxBalChk = $pdo->prepare("SELECT Balance FROM user WHERE id = :uid LIMIT 1");
+            $__rxBalChk->execute([':uid' => (string) $from_id]);
+            $__rxBalNow = $__rxBalChk->fetchColumn();
+            if ($__rxBalNow !== false && intval($__rxBalNow) < intval($pricelastextend)) {
+                if (function_exists('rx_log_event')) {
+                    rx_log_event('EXTEND_REJECTED_INSUFFICIENT_BALANCE', 'Fresh balance below extend price; rejected before panel call', [
+                        'from_id' => $from_id,
+                        'invoice' => $id_invoice ?? null,
+                        'price'   => $pricelastextend,
+                        'balance' => $__rxBalNow,
+                        'agent'   => $user['agent'] ?? null,
+                    ]);
+                }
+                sendmessage($from_id, "❌ موجودی کیف پول شما برای این تمدید کافی نیست و درخواست انجام نشد.\n\n▫️مبلغ تمدید : " . number_format(intval($pricelastextend)) . " تومان\n▫️موجودی فعلی : " . number_format(intval($__rxBalNow)) . " تومان\n\nلطفاً ابتدا کیف پول خود را شارژ کنید.", null, 'HTML');
+                return;
+            }
+        } catch (Throwable $__rxBalErr) {
+            // اگر خودِ این بررسی خطا داد، جلوی تمدیدِ درست را نمی‌گیریم؛
+            // گاردِ اتمیکِ پایین‌تر همچنان سرِ جایش است.
+            error_log('[extend] fresh-balance guard failed: ' . $__rxBalErr->getMessage());
+        }
+    }
     $extend = $ManagePanel->extend($marzban_list_get['Methodextend'], $prodcut['Volume_constraint'], $prodcut['Service_time'], $nameloc['username'], $prodcut['code_product'], $marzban_list_get['code_panel']);
     if ($extend['status'] == false) {
         if (nmStockCompleteExtendFallback($from_id, $user, $nameloc, $prodcut, $pricelastextend, 'wallet_extend_panel_fallback')) {
@@ -2839,13 +2868,28 @@ $textconnect
         $stmtExtendDeduct->bindValue(':delta', (int) $pricelastextend, PDO::PARAM_INT);
         $stmtExtendDeduct->bindValue(':uid', $from_id, PDO::PARAM_STR);
         $stmtExtendDeduct->execute();
-        if ($stmtExtendDeduct->rowCount() === 0 && function_exists('rx_log_event')) {
-            rx_log_event('EXTEND_DOUBLE_SPEND_OR_INSUFFICIENT', 'Atomic extend-deduct affected 0 rows after panel extend already succeeded', [
-                'from_id' => $from_id,
-                'invoice' => $id_invoice ?? null,
-                'price'   => $pricelastextend,
-                'agent'   => $user['agent'] ?? null,
-            ]);
+        if ($stmtExtendDeduct->rowCount() === 0) {
+            // [FIX تمدیدِ رایگان] قبلاً فقط لاگ می‌شد و کد ادامه می‌داد یعنی
+            // سرویس تمدید می‌شد ولی هیچ پولی کسر نمی‌شد. حالا درخواست رد
+            // می‌شود: نه ردیفِ پرداختی ثبت می‌شود، نه فاکتور active می‌گردد.
+            if (function_exists('rx_log_event')) {
+                rx_log_event('EXTEND_DOUBLE_SPEND_OR_INSUFFICIENT', 'Atomic extend-deduct affected 0 rows after panel extend already succeeded; extend rejected', [
+                    'from_id' => $from_id,
+                    'invoice' => $id_invoice ?? null,
+                    'price'   => $pricelastextend,
+                    'agent'   => $user['agent'] ?? null,
+                ]);
+            }
+            sendmessage($from_id, "❌ این تمدید ثبت نشد چون در لحظه‌ی پرداخت، موجودی کیف پول شما کافی نبود.\n\n▫️مبلغ تمدید : " . number_format(intval($pricelastextend)) . " تومان\n\nاگر مبلغی از حساب شما کسر شده یا سرویس تغییر کرده، لطفاً با پشتیبانی در ارتباط باشید.", null, 'HTML');
+            if (strlen($setting['Channel_Report'] ?? '') > 0) {
+                telegram('sendmessage', [
+                    'chat_id' => $setting['Channel_Report'],
+                    'message_thread_id' => $errorreport,
+                    'text' => "⚠️ تمدید رد شد (موجودی ناکافی در لحظه‌ی کسر)\n\nآیدی عددی : {$from_id}\nنام کاربری سرویس : {$nameloc['username']}\nنام پنل : {$marzban_list_get['name_panel']}\nمبلغ : " . number_format(intval($pricelastextend)) . " تومان\n\nتوجه: تمدید روی پنل اجرا شده اما در ربات ثبت و کسر نشد؛ لطفاً بررسی کنید.",
+                    'parse_mode' => "HTML"
+                ]);
+            }
+            return;
         }
     } else {
 
