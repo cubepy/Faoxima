@@ -26,6 +26,39 @@ class ManagePanel
     // پنل برای payloadِ نادرست 422، برای توکنِ منقضی 401 و برای مسیرِ اشتباه 404
     // برمی‌گرداند — همه‌ی این‌ها از کنار آن شرط رد می‌شدند و «موفق» گزارش می‌شدند:
     // پول کم می‌شد، فاکتور تمدید می‌شد، و روی پنل هیچ اتفاقی نمی‌افتاد.
+    /**
+     * پاسارگاد (PasarGuard) گویشِ جدید را حرف می‌زند: group_ids/proxy_settings
+     * به‌جای inbounds/proxies، و expire به‌صورت رشته‌ی ISO 8601. پنلی که از خودِ
+     * ربات اضافه شده با type='marzban' و version_panel='1' ذخیره می‌شود، پس
+     * تصمیم را باید بر اساس همین دو ستون گرفت نه فقط روی type.
+     */
+    private static function rx_is_new_dialect($panel): bool
+    {
+        if (!is_array($panel)) return false;
+        return ((string) ($panel['version_panel'] ?? '0') === '1')
+            || (($panel['type'] ?? '') === 'pasargard');
+    }
+
+    /**
+     * عضویتِ واقعیِ کاربر را زنده می‌خواند. اگر نشد عمداً حدس نمی‌زنیم و null
+     * برمی‌گردانیم تا فیلد اصلاً فرستاده نشود؛ فرستادنِ گروه‌های پیش‌فرض،
+     * کاربری را که دستی در گروهِ دیگری گذاشته شده جابه‌جا می‌کند.
+     */
+    private static function rx_pasarguard_groups($username, $name_panel): ?array
+    {
+        $live = getuser($username, $name_panel);
+        if (empty($live['error']) && !empty($live['body'])) {
+            $decoded = json_decode((string) $live['body'], true);
+            if (is_array($decoded) && isset($decoded['group_ids']) && is_array($decoded['group_ids'])) {
+                $groups = array_values(array_map('intval', $decoded['group_ids']));
+                if ($groups !== []) return $groups;
+            }
+        }
+        error_log('[panels] pasargard: could not read live group_ids for ' . $username
+            . ' on ' . (string) $name_panel . ' — omitting group_ids rather than guessing');
+        return null;
+    }
+
     private static function rx_http_failed($response): ?string
     {
         if (!is_array($response)) return null;
@@ -610,7 +643,12 @@ class ManagePanel
                 if (!preg_match('/^(https?:\/\/)?([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(:\d+)?((\/[^\s\/]+)+)?$/', $UsernameData['subscription_url'])) {
                     $UsernameData['subscription_url'] = $Get_Data_Panel['url_panel'] . "/" . ltrim($UsernameData['subscription_url'], "/");
                 }
-                if ((string)($Get_Data_Panel['version_panel'] ?? '0') === '1') {
+                // پاسارگاد همیشه گویشِ جدید را حرف می‌زند، حتی اگر ستون
+                // version_panel رویش '0' مانده باشد (پنل‌هایی که از پنلِ وب
+                // اضافه شده‌اند). بدون این، expire به‌صورت رشته باقی می‌ماند و
+                // همه‌ی محاسباتِ تاریخ روی آن بی‌معنا می‌شود.
+                if ((string)($Get_Data_Panel['version_panel'] ?? '0') === '1'
+                    || ($Get_Data_Panel['type'] ?? '') === 'pasargard') {
                     $UsernameData['expire'] = strtotime($UsernameData['expire']);
                     $UsernameData['links'] = base64_decode(outputlunk($UsernameData['subscription_url']));
                     $UsernameData['links'] = explode("\n", $UsernameData['links']);
@@ -641,7 +679,8 @@ class ManagePanel
                 if ($inoice != false) {
                     $UsernameData['subscription_url'] = "https://$domainhosts/sub/" . $inoice['id_invoice'];
                 }
-                if ((string)($Get_Data_Panel['version_panel'] ?? '0') === '1') {
+                if ((string)($Get_Data_Panel['version_panel'] ?? '0') === '1'
+                    || ($Get_Data_Panel['type'] ?? '') === 'pasargard') {
                     $UsernameData['proxies'] = isset($UsernameData['proxy_settings']) ? $UsernameData['proxy_settings'] : null;
                 }
                 $Output = array(
@@ -2299,7 +2338,17 @@ class ManagePanel
             $data_limit_last = $data_limit_last < 0 ? 0 : $data_limit_last;
             $data_limit_new = $data_limit_new + $data_limit_last;
         }
-        if ($panel['type'] == "marzban") {
+        // [FIX تمدیدِ بی‌اثر روی پاسارگاد — انتخابِ گویش]
+        // پاسارگاد وقتی از خودِ ربات اضافه می‌شود با type='marzban' و
+        // version_panel='1' ذخیره می‌گردد، نه با type='pasargard'. پس شرطِ
+        // قدیمی («type == marzban») همان پنل پاسارگاد را هم می‌گرفت و
+        // payloadِ نسخه‌ی قدیمِ Marzban (inbounds/proxies) برایش می‌فرستاد.
+        // بقیه‌ی مسیرهای نوشتن در همین کد با همین تستِ زیر تصمیم می‌گیرند
+        // (createUser در Marzban.php و Modifyuser بالاتر)، برای همین «خرید
+        // جدید» روی پاسارگاد کار می‌کرد ولی «تمدید» بی‌صدا بی‌اثر می‌ماند.
+        $rxNewDialect = ((string) ($panel['version_panel'] ?? '0') === '1')
+            || (($panel['type'] ?? '') === 'pasargard');
+        if ($panel['type'] == "marzban" && !$rxNewDialect) {
             $data = array(
                 'data_limit' => $data_limit_new,
                 'expire' => $time_new,
@@ -2308,7 +2357,7 @@ class ManagePanel
             if ($invoice != false && $invoice['uuid'] != null) {
                 $data['proxies'] = json_decode($invoice['uuid'], true);
             }
-        } elseif ($panel['type'] == "pasargard") {
+        } elseif (in_array($panel['type'], ["marzban", "pasargard"], true)) {
             // [FIX تمدیدِ بی‌اثر روی پاسارگاد]
             // پاسارگاد (PasarGuard) برای ویرایشِ کاربر نام‌فیلدهای دیگری دارد:
             // group_ids / proxy_settings — نه inbounds / proxies. قبلاً همان
@@ -2317,9 +2366,14 @@ class ManagePanel
             // فاکتور در ربات تمدید می‌شد، ولی روی پنل هیچ چیز عوض نمی‌شد —
             // سرویس همچنان «پایان حجم» می‌ماند. (proxy_settings را خودِ
             // Modifyuser بالاتر زنده می‌خواند و تزریق می‌کند.)
+            // [FIX قالبِ expire] این نسخه از پنل تاریخِ انقضا را به صورت
+            // رشته‌ی ISO 8601 می‌گیرد و می‌دهد — createUser هم دقیقاً
+            // date('c', ...) می‌فرستد و DataUser هم پاسخ را با strtotime()
+            // می‌خواند. اینجا اما عددِ خامِ unix فرستاده می‌شد؛ پنل به PUT
+            // پاسخ ۲۰۰ می‌داد ولی تاریخ را همان‌طور که بود نگه می‌داشت.
             $data = array(
                 'data_limit' => $data_limit_new,
-                'expire' => $time_new,
+                'expire' => $time_new == 0 ? 0 : date('c', $time_new),
             );
             // عضویتِ واقعیِ کاربر را زنده می‌خوانیم و همان را برمی‌گردانیم.
             // اگر group_ids را حذف کنیم، بسته به نسخه‌ی پنل ممکن است عضویتش
@@ -2539,6 +2593,36 @@ class ManagePanel
                         'msg' => 'پنل تمدید را اعمال نکرد (حجم مصرفی ریست نشد). لطفاً روش تمدید و تنظیمات پنل را بررسی کنید.'
                     );
                 }
+
+                // [FIX «تمدید موفق ولی حجم/تاریخِ قدیمی»]
+                // چکِ بالا فقط حالتِ «ریست نشدن مصرف» را می‌گرفت. اگر مصرف قبلاً
+                // ریست شده باشد ولی پنل data_limit و expire را نادیده گرفته
+                // باشد، همه چیز «موفق» به نظر می‌رسید و مشتری همان حجم و همان
+                // تاریخِ قبلی را می‌دید. حالا خودِ دو مقدار را هم تایید می‌کنیم.
+                $rxMismatch = null;
+                if ($data_limit_new > 0 && $rxLimit !== null
+                    && abs($rxLimit - (float) $data_limit_new) > 1048576) {
+                    $rxMismatch = 'data_limit ' . $rxLimit . ' != ' . $data_limit_new;
+                }
+                $rxAfterStatus = (string) ($rxAfter['status'] ?? '');
+                if ($rxMismatch === null && $time_new > 0 && $rxAfterStatus !== 'on_hold') {
+                    $rxExpire = isset($rxAfter['expire']) ? (int) $rxAfter['expire'] : null;
+                    if ($rxExpire !== null && $rxExpire > 0
+                        && abs($rxExpire - (int) $time_new) > 300) {
+                        $rxMismatch = 'expire ' . $rxExpire . ' != ' . (int) $time_new;
+                    }
+                }
+                if ($rxMismatch !== null) {
+                    error_log('[panels] extend verify FAILED for ' . $username
+                        . ' on ' . (string) $panel['name_panel']
+                        . ' — ' . $rxMismatch
+                        . ' method=' . $Method_extend
+                        . ' payload=' . json_encode($data, JSON_UNESCAPED_UNICODE));
+                    return array(
+                        'status' => false,
+                        'msg' => 'پنل تمدید را اعمال نکرد (' . $rxMismatch . '). لطفاً نوع/نسخه‌ی پنل و روش تمدید را بررسی کنید.'
+                    );
+                }
             } else {
                 error_log('[panels] extend verify skipped for ' . $username
                     . ' on ' . (string) $panel['name_panel'] . ' — could not read back');
@@ -2582,12 +2666,24 @@ class ManagePanel
         update("invoice", 'uuid', null, "username", $username_account);
         update("invoice", 'Status', "active", "username", $username_account);
         if (in_array($panel['type'], ["marzban", "pasargard"], true)) {
-            $data = array(
-                'data_limit' => $new_limit,
-                'inbounds' => $inbounds,
-            );
-            if ($invoice != false && $invoice['uuid'] != null) {
-                $data['proxies'] = json_decode($invoice['uuid'], true);
+            // [FIX حجمِ اضافه روی پاسارگاد] همان اشکالِ تمدید: payloadِ نسخه‌ی
+            // قدیمِ Marzban برای پنلِ پاسارگاد فرستاده می‌شد و بی‌اثر می‌ماند.
+            if (self::rx_is_new_dialect($panel)) {
+                $data = array(
+                    'data_limit' => $new_limit,
+                );
+                $rxGroups = self::rx_pasarguard_groups($username_account, $panel['name_panel']);
+                if ($rxGroups !== null) {
+                    $data['group_ids'] = $rxGroups;
+                }
+            } else {
+                $data = array(
+                    'data_limit' => $new_limit,
+                    'inbounds' => $inbounds,
+                );
+                if ($invoice != false && $invoice['uuid'] != null) {
+                    $data['proxies'] = json_decode($invoice['uuid'], true);
+                }
             }
         } elseif ($panel['type'] == "marzneshin") {
             $data = array(
@@ -2741,12 +2837,24 @@ class ManagePanel
         update("invoice", 'uuid', null, "username", $username_account);
         update("invoice", 'Status', "active", "username", $username_account);
         if (in_array($panel['type'], ["marzban", "pasargard"], true)) {
-            $data = array(
-                'expire' => $new_limit,
-                'inbounds' => $inbounds,
-            );
-            if ($invoice != false && $invoice['uuid'] != null) {
-                $data['proxies'] = json_decode($invoice['uuid'], true);
+            // [FIX زمانِ اضافه روی پاسارگاد] هم انتخابِ payload و هم قالبِ expire
+            // (رشته‌ی ISO 8601، نه عددِ خامِ unix) — مثل createUser و تمدید.
+            if (self::rx_is_new_dialect($panel)) {
+                $data = array(
+                    'expire' => $new_limit == 0 ? 0 : date('c', $new_limit),
+                );
+                $rxGroups = self::rx_pasarguard_groups($username_account, $panel['name_panel']);
+                if ($rxGroups !== null) {
+                    $data['group_ids'] = $rxGroups;
+                }
+            } else {
+                $data = array(
+                    'expire' => $new_limit,
+                    'inbounds' => $inbounds,
+                );
+                if ($invoice != false && $invoice['uuid'] != null) {
+                    $data['proxies'] = json_decode($invoice['uuid'], true);
+                }
             }
         } elseif ($panel['type'] == "marzneshin") {
             $data = array(
