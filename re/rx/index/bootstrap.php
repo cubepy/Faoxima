@@ -2648,6 +2648,33 @@ $textconnect
         sendmessage($from_id, "❌ تمدید با خطا مواجه گردید مراحل تمدید را مجددا انجام دهید.", null, 'HTML');
         return;
     }
+
+    // [FIX تمدیدِ تکراری — مشتری دوبار پول می‌داد]
+    // این هندلر هیچ گاردی برای تکرار نداشت. اگر مشتری دکمه‌ی تمدید را دوبار
+    // بزند (کاری که وقتی تمدید ظاهراً کار نمی‌کند حتماً می‌کند)، هر دو درخواست
+    // کامل اجرا می‌شوند: هر دو پنل را صدا می‌زنند، هر دو از کیف پول کم می‌کنند
+    // و هر دو یک ردیف در service_other می‌سازند.
+    // در دیتابیس همین حساب دو تمدیدِ ۴۰٬۰۰۰ تومانی با فاصله‌ی «۳ ثانیه» دارد.
+    // اگر همین سرویس در ۹۰ ثانیه‌ی گذشته تمدید شده، تمدیدِ دوم را رد می‌کنیم.
+    try {
+        $__rxDupChk = $pdo->prepare(
+            "SELECT time FROM service_other
+              WHERE id_user = :u AND username = :n AND type = 'extend_user'
+              ORDER BY id DESC LIMIT 1"
+        );
+        $__rxDupChk->execute([':u' => (string) $from_id, ':n' => (string) $nameloc['username']]);
+        $__rxLastExtend = $__rxDupChk->fetchColumn();
+        if ($__rxLastExtend) {
+            $__rxLastTs = strtotime(str_replace('/', '-', (string) $__rxLastExtend));
+            if ($__rxLastTs && (time() - $__rxLastTs) < 90) {
+                sendmessage($from_id, "⏳ همین سرویس چند لحظه پیش تمدید شد. برای جلوگیری از کسر دوباره‌ی وجه، این درخواست انجام نشد.\n\nاگر تمدید اعمال نشده، چند دقیقه صبر کنید یا با پشتیبانی در ارتباط باشید.", null, 'HTML');
+                return;
+            }
+        }
+    } catch (Throwable $__rxDupErr) {
+        // اگر خودِ این بررسی خطا داد، جلوی تمدیدِ درست را نمی‌گیریم
+        error_log('[extend] duplicate-guard check failed: ' . $__rxDupErr->getMessage());
+    }
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
     // [FIX فروشِ تمدیدِ خاموش] نمایشِ پنلِ ادمین مقدارِ NULL را «خاموش» نشان
         // می‌داد، ولی این شرط فقط با رشته‌ی دقیقِ off_extend مطابقت می‌کرد و
