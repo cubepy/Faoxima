@@ -4452,8 +4452,11 @@ if ($datain == "settimecornremove" && $adminrulecheck['rule'] == "administrator"
     step("setinboundandprotocol", $from_id);
 } elseif ($user['step'] == "setinboundandprotocol") {
     $panel = select("marzban_panel", "*", "name_panel", $user['Processing_value'], "select");
-    if ($panel['type'] == "marzban") {
-        if ((string)($panel['version_panel'] ?? '0') === '1') {
+    // [FIX پاسارگاد] پنلی که با type='pasargard' ذخیره شده (افزوده‌شده از پنلِ
+    // وب) از این شاخه رد می‌شد و هیچ‌کدام از دو ستونِ inbounds/proxies ست
+    // نمی‌شد — یعنی «تنظیم اینباند و پروتکل» بی‌صدا هیچ کاری نمی‌کرد.
+    if (in_array($panel['type'], ["marzban", "pasargard"], true)) {
+        if ((string)($panel['version_panel'] ?? '0') === '1' || $panel['type'] === 'pasargard') {
             $DataUserOut = getuser($text, $user['Processing_value']);
             if (!empty($DataUserOut['error'])) {
                 nm_adminInstantReply($from_id, $DataUserOut['error'], null, 'HTML');
@@ -4776,7 +4779,47 @@ elseif ($text == "🫣 مخفی کردن پنل برای یک کاربر" && $ad
 } elseif ($user['step'] == "getdatainboundproduct") {
     $marzban_list_get = select("marzban_panel", "*", "code_panel", $user['Processing_value_one']);
     $datainbound = "";
-    if ($marzban_list_get['type'] == "marzban") {
+    // [FIX پاسارگاد] این شاخه فقط کلیدهای نسخه‌ی قدیمِ مرزبان
+    // (proxies/inbounds) را می‌خواند. پنلِ پاسارگاد این کلیدها را ندارد
+    // (proxy_settings/group_ids دارد)، پس همیشه به «کاربر یافت نشد» می‌خورد و
+    // ادمین فکر می‌کرد دکمه خراب است.
+    if (in_array($marzban_list_get['type'], ["marzban", "pasargard"], true)
+        && ((string)($marzban_list_get['version_panel'] ?? '0') === '1'
+            || $marzban_list_get['type'] === 'pasargard')) {
+        $DataUserOut = getuser($text, $marzban_list_get['name_panel']);
+        if (!empty($DataUserOut['error'])) {
+            nm_adminInstantReply($from_id, $DataUserOut['error'], null, 'HTML');
+            return;
+        }
+        if (!empty($DataUserOut['status']) && $DataUserOut['status'] != 200) {
+            nm_adminInstantReply($from_id, "❌  خطایی رخ داده است کد خطا :  {$DataUserOut['status']}", null, 'HTML');
+            return;
+        }
+        $DataUserOut = json_decode($DataUserOut['body'], true);
+        if ((isset($DataUserOut['msg']) && $DataUserOut['msg'] == "User not found") or !isset($DataUserOut['proxy_settings'])) {
+            nm_adminInstantReply($from_id, $textbotlang['users']['stateus']['UserNotFound'], null, 'html');
+            return;
+        }
+        foreach ($DataUserOut['proxy_settings'] as $key => &$value) {
+            if ($key == "shadowsocks" || $key == "trojan") {
+                unset($DataUserOut['proxy_settings'][$key]['password']);
+            } else {
+                unset($DataUserOut['proxy_settings'][$key]['id']);
+            }
+            if (count($DataUserOut['proxy_settings'][$key]) == 0) {
+                $DataUserOut['proxy_settings'][$key] = new stdClass();
+            }
+        }
+        unset($value);
+        $stmt = $pdo->prepare("UPDATE product SET proxies = :proxies WHERE id = :name_product AND (Location = :Location OR Location = '/all') AND agent = :agent");
+        $proxies_json = json_encode($DataUserOut['proxy_settings']);
+        $stmt->bindParam(':proxies', $proxies_json);
+        $stmt->bindParam(':name_product', $user['Processing_value']);
+        $stmt->bindParam(':Location', $marzban_list_get['name_panel']);
+        $stmt->bindParam(':agent', $user['Processing_value_tow']);
+        $stmt->execute();
+        $datainbound = json_encode($DataUserOut['group_ids']);
+    } elseif ($marzban_list_get['type'] == "marzban") {
         $DataUserOut = getuser($text, $marzban_list_get['name_panel']);
         if (!empty($DataUserOut['error'])) {
             nm_adminInstantReply($from_id, $DataUserOut['error'], null, 'HTML');

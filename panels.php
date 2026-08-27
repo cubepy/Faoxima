@@ -40,6 +40,63 @@ class ManagePanel
     }
 
     /**
+     * یک مقدارِ خام (رشته‌ی JSON یا آرایه) را به لیستِ تمیزِ شناسه‌ی گروه تبدیل
+     * می‌کند. اگر محتوا لیستِ عددی نبود null برمی‌گرداند تا صدازننده به
+     * group_ids دست نزند — بهتر از فرستادنِ چیزی که معنایش را نمی‌دانیم.
+     */
+    private static function rx_group_id_list($raw): ?array
+    {
+        if (is_string($raw)) {
+            $raw = json_decode($raw, true);
+        } elseif (is_object($raw)) {
+            $raw = (array) $raw;
+        }
+        if (!is_array($raw) || $raw === []) return null;
+        $out = array();
+        foreach ($raw as $v) {
+            if (!is_scalar($v) || !is_numeric($v)) return null;
+            $out[] = (int) $v;
+        }
+        $out = array_values(array_unique($out));
+        return $out === array() ? null : $out;
+    }
+
+    /**
+     * گروه‌هایی که «باید» روی این سرویس باشند: اگر محصول لیستِ خودش را دارد
+     * همان، وگرنه لیستِ پیش‌فرضِ پنل. همان ترتیبی که createUser هم استفاده
+     * می‌کند، تا سرویسِ ارزان‌تر گروه‌های پکیجِ گران‌تر را نگیرد.
+     */
+    private static function rx_expected_groups($username, $panel): ?array
+    {
+        if (!is_array($panel)) return null;
+        $invoice = function_exists('rx_invoice_on_panel')
+            ? rx_invoice_on_panel((string) $username, (string) ($panel['name_panel'] ?? ''))
+            : false;
+        if (is_array($invoice) && !empty($invoice['name_product'])) {
+            $product = select("product", "*", "name_product", $invoice['name_product'], "select");
+            if (is_array($product) && !empty($product['inbounds'])) {
+                $fromProduct = self::rx_group_id_list($product['inbounds']);
+                if ($fromProduct !== null) return $fromProduct;
+            }
+        }
+        return self::rx_group_id_list($panel['inbounds'] ?? null);
+    }
+
+    /**
+     * گروه‌های تنظیم‌شده‌ی ربات را به گروه‌های فعلیِ کاربر «اضافه» می‌کند.
+     * فقط اجتماع می‌گیریم و هیچ‌وقت چیزی کم نمی‌کنیم: اگر ادمین گروه تازه‌ای به
+     * پنل اضافه کرده باشد، سرویس‌های قدیمی هم آن را می‌گیرند، ولی گروهی که
+     * دستی به یک کاربرِ خاص داده شده از بین نمی‌رود.
+     */
+    private static function rx_merge_groups(?array $live, ?array $expected): ?array
+    {
+        if ($live === null && $expected === null) return null;
+        if ($live === null) return $expected;
+        if ($expected === null) return $live;
+        return array_values(array_unique(array_merge($live, $expected)));
+    }
+
+    /**
      * عضویتِ واقعیِ کاربر را زنده می‌خواند. اگر نشد عمداً حدس نمی‌زنیم و null
      * برمی‌گردانیم تا فیلد اصلاً فرستاده نشود؛ فرستادنِ گروه‌های پیش‌فرض،
      * کاربری را که دستی در گروهِ دیگری گذاشته شده جابه‌جا می‌کند.
@@ -1289,6 +1346,26 @@ class ManagePanel
                     'msg' => $revoke_sub['detail']
                 );
             } else {
+                // [FEATURE گروهِ تازه‌ی پنل] «آپدیت لینک اشتراک» تا حالا فقط
+                // توکنِ ساب را عوض می‌کرد و به عضویتِ گروه‌ها دست نمی‌زد، پس
+                // گروهی که ادمین بعداً به پنل اضافه کرده بود هیچ‌وقت به
+                // سرویس‌های موجود نمی‌رسید. حالا همین‌جا هم اجتماع را می‌فرستیم
+                // تا مشتری با یک بار زدنِ همین دکمه به‌روز شود. فقط اضافه
+                // می‌کنیم؛ چیزی کم نمی‌شود. اگر نشد، بی‌صدا رد می‌شویم — رفرشِ
+                // لینک نباید به‌خاطر این شکست بخورد.
+                if (self::rx_is_new_dialect($Get_Data_Panel)) {
+                    try {
+                        $rxLive = self::rx_pasarguard_groups($username, $name_panel);
+                        $rxWant = self::rx_expected_groups($username, $Get_Data_Panel);
+                        $rxGroups = self::rx_merge_groups($rxLive, $rxWant);
+                        if (is_array($rxGroups) && $rxGroups !== [] && $rxGroups != $rxLive) {
+                            $this->Modifyuser($username, $name_panel, array('group_ids' => $rxGroups));
+                        }
+                    } catch (Throwable $rxGrpErr) {
+                        error_log('[panels] revoke_sub group sync failed for ' . $username
+                            . ' on ' . (string) $name_panel . ': ' . $rxGrpErr->getMessage());
+                    }
+                }
                 $config = new ManagePanel();
                 $Data_User = $config->DataUser($name_panel, $username);
                 if (!preg_match('/^(https?:\/\/)?([a-zA-Z0-9-]+\.)+[a-zA-Z]{2,}(:\d+)?((\/[^\s\/]+)+)?$/', $Data_User['subscription_url'])) {
@@ -2388,10 +2465,15 @@ class ManagePanel
                     $rxLiveGroups = array_values(array_map('intval', $rxLiveDecoded['group_ids']));
                 }
             }
-            if (is_array($rxLiveGroups) && $rxLiveGroups !== []) {
-                $data['group_ids'] = $rxLiveGroups;
+            // [FEATURE گروهِ تازه‌ی پنل] گروهی که ادمین بعداً به پنل اضافه کرده
+            // خودبه‌خود به سرویس‌های قدیمی وصل نمی‌شد. حالا لیستِ تنظیم‌شده‌ی
+            // ربات (محصول، وگرنه پنل) را با عضویتِ فعلیِ کاربر «اجتماع» می‌گیریم:
+            // گروهِ تازه اضافه می‌شود و هیچ گروهی حذف نمی‌شود.
+            $rxGroups = self::rx_merge_groups($rxLiveGroups, self::rx_expected_groups($username, $panel));
+            if (is_array($rxGroups) && $rxGroups !== []) {
+                $data['group_ids'] = $rxGroups;
             } else {
-                error_log('[panels] pasargard renew: could not read live group_ids for '
+                error_log('[panels] pasargard renew: could not resolve group_ids for '
                     . $username . ' on ' . (string) $panel['name_panel']
                     . ' — omitting group_ids rather than guessing');
             }
