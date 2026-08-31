@@ -1295,6 +1295,15 @@ $paycount
         step('add_guard_api_key', $from_id);
         return;
     }
+    if ($userdata['type'] == "guardv2") {
+        // گاردv2 آدرسِ ثابتِ عمومی ندارد (روی سرورِ خودِ فروشنده بالا می‌آید)،
+        // پس برخلافِ نسخه‌ی یک باید آدرس را از ادمین بپرسیم.
+        savedata("save", "username", "null");
+        savedata("save", "password", "null");
+        nm_adminInstantReply($from_id, "📌 آدرس پنل گاردv2 را ارسال نمایید.\n\nمثال : <code>https://panel.example.com</code>", $backadmin, 'HTML');
+        step('add_link_panel', $from_id);
+        return;
+    }
     nm_adminInstantReply($from_id, $textbotlang['Admin']['managepanel']['addpanelurl'], $backadmin, 'HTML');
     step('add_link_panel', $from_id);
 } elseif ($user['step'] == "add_link_panel") {
@@ -1311,7 +1320,7 @@ $paycount
         savedata("save", "username", "null");
         savedata("save", "password", "null");
         return;
-    } elseif ($userdata['type'] == "guard") {
+    } elseif ($userdata['type'] == "guard" || $userdata['type'] == "guardv2") {
         nm_adminInstantReply($from_id, $textbotlang['Admin']['managepanel']['getapikey'], $backadmin, 'HTML');
         step('add_guard_api_key', $from_id);
         savedata("save", "username", "null");
@@ -1335,8 +1344,9 @@ $paycount
         return;
     }
     $userdata = json_decode($user['Processing_value'], true);
-    $guardBaseUrl = guardGetBaseUrl(isset($userdata['url_panel']) ? $userdata['url_panel'] : '');
-    $connectionResult = guardTestConnection($guardBaseUrl, $apiKey);
+    $rxGuardVersion = (isset($userdata['type']) && $userdata['type'] === 'guardv2') ? 2 : 1;
+    $guardBaseUrl = guardGetBaseUrl(isset($userdata['url_panel']) ? $userdata['url_panel'] : '', $rxGuardVersion);
+    $connectionResult = guardTestConnection($guardBaseUrl, $apiKey, $rxGuardVersion);
     if ($connectionResult['status'] === false) {
         $errorMessage = $connectionResult['msg'] ?? $textbotlang['Admin']['managepanel']['invalidapikey'];
         $feedback = "❌ اتصال به گارد ناموفق بود:\n{$errorMessage}\n\n📌 لطفاً API Key را بررسی کرده و مجدداً ارسال کنید.";
@@ -1346,11 +1356,13 @@ $paycount
     }
     $panelConfig = $connectionResult['panel_config'] ?? [
         'status' => true,
+        'version' => $rxGuardVersion,
         'panel' => [
             'type' => 'guard',
             'url_panel' => $guardBaseUrl,
             'api_key' => $apiKey,
             'password_panel' => null,
+            'version_panel' => (string) $rxGuardVersion,
         ],
         'api_key' => $apiKey,
     ];
@@ -1762,6 +1774,19 @@ $paycount
     $randomString = bin2hex(random_bytes(2));
 
     $rx_panel_version_flag = '0';
+    // گاردv2 هم مثل پاسارگاد یک «نوعِ ظاهری» است: در ویزارد با نامِ خودش
+    // حمل می‌شود ولی در دیتابیس type='guard' می‌ماند و نسخه در ستونِ
+    // version_panel می‌نشیند. این‌طور همه‌ی شاخه‌های type == "guard" در
+    // panels.php و finance.php و مینی‌اپ بدون هیچ تغییری کار می‌کنند.
+    if (isset($userdata['type']) && $userdata['type'] === 'guardv2') {
+        $rx_panel_version_flag = '2';
+        $userdata['type'] = 'guard';
+        $stmt_fix_g2 = $connect->prepare("UPDATE user SET Processing_value = ? WHERE id = ?");
+        $rx_fixed_json_g2 = json_encode($userdata, JSON_UNESCAPED_UNICODE);
+        $stmt_fix_g2->bind_param("ss", $rx_fixed_json_g2, $from_id);
+        $stmt_fix_g2->execute();
+        $stmt_fix_g2->close();
+    }
     if (isset($userdata['type']) && $userdata['type'] === 'pasargard') {
         $rx_panel_version_flag = '1';
         $userdata['type'] = 'marzban';

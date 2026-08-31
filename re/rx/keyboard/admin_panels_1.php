@@ -325,6 +325,9 @@ $keyboardtypepanel = json_encode([
             ['text' => "Guard (GuardCore)", 'callback_data' => 'typepanel#guard']
         ],
         [
+            ['text' => "🛡 گاردv2", 'callback_data' => 'typepanel#guardv2']
+        ],
+        [
             ['text' => "WGDashboard", 'callback_data' => 'typepanel#WGDashboard'],
             ['text' => "s_ui", 'callback_data' => 'typepanel#s_ui']
         ],

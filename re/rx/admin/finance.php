@@ -197,11 +197,14 @@ if (false) {
         nm_adminInstantReply($from_id, $textbotlang['Admin']['managepanel']['invalidapikey'], $backadmin, 'HTML');
         return;
     }
-    $baseUrl = guardGetBaseUrl($typepanel['url_panel'] ?? null);
+    // نسخه‌ی پنل را از خودِ ردیف می‌خوانیم؛ وگرنه پنلِ گاردv2 که آدرسش خالی
+    // مانده بی‌صدا روی آدرسِ core نسخه‌ی یک تست می‌شد.
+    $rxGuardVer = guardPanelVersion($typepanel);
+    $baseUrl = guardGetBaseUrl($typepanel['url_panel'] ?? null, $rxGuardVer);
     $currentKey = trim((string) (!empty($typepanel['api_key']) ? $typepanel['api_key'] : ($typepanel['password_panel'] ?? '')));
     if ($currentKey !== '' && hash_equals($currentKey, $apiKey)) {
         $sameKeyMessage = "ℹ️ کلید جدید با کلید قبلی یکسان است. تغییری انجام نشد.";
-        $testResult = guardTestConnection($baseUrl, $apiKey);
+        $testResult = guardTestConnection($baseUrl, $apiKey, $rxGuardVer);
         $statusText = guardFormatConnectionResult($testResult);
         if ($statusText !== '') {
             $sameKeyMessage .= "\n{$statusText}";
@@ -214,7 +217,7 @@ if (false) {
     update("marzban_panel", "password_panel", $apiKey, "name_panel", $user['Processing_value']);
     update("marzban_panel", "url_panel", $baseUrl, "name_panel", $user['Processing_value']);
     update("marzban_panel", "datelogin", null, "name_panel", $user['Processing_value']);
-    $connectionResult = guardTestConnection($baseUrl, $apiKey);
+    $connectionResult = guardTestConnection($baseUrl, $apiKey, $rxGuardVer);
     $statusText = guardFormatConnectionResult($connectionResult);
     $savedMessage = $textbotlang['Admin']['managepanel']['guard']['api_key_saved'] ?? "🔑 کلید Guard ذخیره شد.";
     outtypepanel("guard", "{$savedMessage}\n{$statusText}");
@@ -232,9 +235,10 @@ if (false) {
         step('home', $from_id);
         return;
     }
-    $testResult = guardTestConnection($typepanel['url_panel'] ?? null, $apiKey);
+    $rxGuardVer = guardPanelVersion($typepanel);
+    $testResult = guardTestConnection($typepanel['url_panel'] ?? null, $apiKey, $rxGuardVer);
     $statusText = guardFormatConnectionResult($testResult);
-    outtypepanel("guard", $statusText);
+    outtypepanel("guard", "🛡 " . guardTypeLabel($rxGuardVer) . "\n" . $statusText);
     step('home', $from_id);
 } elseif ($text == "⚙️ تنظیم سرویس ها" && $adminrulecheck['rule'] == "administrator") {
     $panelName = guardResolveUserPanelName($user);
