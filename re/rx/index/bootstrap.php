@@ -1990,7 +1990,16 @@ $textconnect
     }
     if (function_exists('nmStopIfServicePanelBlocked') && nmStopIfServicePanelBlocked($nameloc, $from_id, null)) return;
     $marzban_list_get = select("marzban_panel", "*", "name_panel", $nameloc['Service_location'], "select");
-    $ManagePanel->RemoveUser($nameloc['Service_location'], $nameloc['username']);
+    // [FIX کانفیگ‌های پاک‌نشده روی پنل] نتیجه‌ی حذف نادیده گرفته می‌شد و فاکتور
+    // بی‌قیدوشرط بسته می‌شد؛ اگر پنل حذف نمی‌کرد، کانفیگ تا ابد رویش می‌ماند و
+    // دیگر هیچ‌جا دیده نمی‌شد. حالا فقط وقتی فاکتور را می‌بندیم که پنل تایید کند.
+    $__rxRemoved = $ManagePanel->RemoveUser($nameloc['Service_location'], $nameloc['username']);
+    if (!is_array($__rxRemoved) || ($__rxRemoved['status'] ?? '') !== 'successful') {
+        error_log('[removeauto] حذف روی پنل ناموفق بود: ' . $nameloc['username']
+            . ' @ ' . $nameloc['Service_location'] . ' — ' . json_encode($__rxRemoved, JSON_UNESCAPED_UNICODE));
+        sendmessage($from_id, "❌ حذف سرویس انجام نشد. لطفاً چند دقیقه بعد دوباره تلاش کنید یا با پشتیبانی در ارتباط باشید.", null, 'HTML');
+        return;
+    }
     update('invoice', 'status', 'removebyuser', 'id_invoice', $id_invoice);
     $tetremove = "ادمین عزیز یک کاربر سرویس خود را پس از پایان حجم یا زمان حدف کرده است
 نام کاربری کانفیک : {$nameloc['username']}";

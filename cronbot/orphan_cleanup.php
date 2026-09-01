@@ -24,23 +24,33 @@
 const RX_ORPHAN_TOKEN = 'cube-orphan-sweep';
 
 $rxCli = (PHP_SAPI === 'cli');
+
+// حالتِ کرون: بی‌صدا، دسته‌ی کوچک، حذف خودکار. برای اجرای زمان‌بندی‌شده.
+$rxCron = $rxCli
+    ? in_array('cron', array_slice($argv, 1), true)
+    : (($_GET['cron'] ?? '') === '1');
+
 if (!$rxCli) {
+    // توکن برای هر دسترسیِ وب لازم است، حتی حالتِ کرون.
     if (($_GET['token'] ?? '') !== RX_ORPHAN_TOKEN) {
         http_response_code(403);
         header('Content-Type: text/plain; charset=utf-8');
         exit("forbidden — توکن اشتباه است\n");
     }
-    header('Content-Type: text/html; charset=utf-8');
-    echo "<!doctype html><meta charset=utf-8><title>Orphan cleanup</title>";
-    echo "<pre style=\"font:13px/1.7 ui-monospace,Menlo,Consolas,monospace;padding:16px\">";
+    if (!$rxCron) {
+        header('Content-Type: text/html; charset=utf-8');
+        echo "<!doctype html><meta charset=utf-8><title>Orphan cleanup</title>";
+        echo "<pre style=\"font:13px/1.7 ui-monospace,Menlo,Consolas,monospace;padding:16px\">";
+    }
 }
 
-// _init.php را لود می‌کنیم تا توابع کمکی‌اش را داشته باشیم، ولی بلوکِ راه‌اندازیِ
-// کرون را با تعریفِ زودهنگامِ این ثابت رد می‌کنیم: آن بلوک با Content-Length: 0 و
-// fastcgi_finish_request() ارتباطِ مرورگر را همان اول می‌بندد و display_errors را
-// خاموش می‌کند — برای کرونِ پس‌زمینه درست است، برای ابزارِ تعاملی نه.
-if (!defined('RX_CRON_INIT_LOADED')) define('RX_CRON_INIT_LOADED', true);
+// در حالتِ تعاملی بلوکِ راه‌اندازیِ کرونِ _init.php را رد می‌کنیم: آن بلوک با
+// Content-Length: 0 و fastcgi_finish_request() ارتباطِ مرورگر را همان اول
+// می‌بندد و display_errors را خاموش می‌کند — برای کرون درست است، برای صفحه‌ای
+// که کسی منتظرش نشسته نه. در حالتِ کرون دقیقاً همان رفتار را می‌خواهیم.
+if (!$rxCron && !defined('RX_CRON_INIT_LOADED')) define('RX_CRON_INIT_LOADED', true);
 require_once __DIR__ . '/_init.php';
+if ($rxCron && function_exists('rx_cron_boot')) rx_cron_boot('orphan_cleanup', 1800);
 
 @ini_set('display_errors', 1);
 @error_reporting(E_ALL & ~E_NOTICE & ~E_DEPRECATED & ~E_WARNING);
@@ -48,7 +58,11 @@ require_once __DIR__ . '/_init.php';
 @set_time_limit(0);
 @ini_set('memory_limit', '256M');
 
-function rx_out($s = '') { echo $s . "\n"; @ob_flush(); @flush(); }
+function rx_out($s = '') {
+    if (!empty($GLOBALS['rxQuiet'])) return;   // حالتِ کرون چیزی چاپ نمی‌کند
+    echo $s . "\n"; @ob_flush(); @flush();
+}
+$GLOBALS['rxQuiet'] = $rxCron;
 
 $rxStart = microtime(true);
 rx_out("Faoxima — پاکسازی کانفیگ‌های یتیم        " . date('Y-m-d H:i:s'));
@@ -105,24 +119,31 @@ if ($rxOneUser !== '') {
 }
 
 /* ---------- سوییپ ---------- */
-$rxApply = $rxCli ? in_array('apply', array_slice($argv, 1), true) : (($_GET['apply'] ?? '') === '1');
+$rxApply = $rxCron
+    || ($rxCli ? in_array('apply', array_slice($argv, 1), true) : (($_GET['apply'] ?? '') === '1'));
 $rxLimit = (int) ($_GET['limit'] ?? 300);
 if ($rxLimit < 1) $rxLimit = 300;
 if ($rxLimit > 5000) $rxLimit = 5000;
+// کرون دسته‌ی کوچک و تصادفی می‌گیرد: هم پنل را زیر فشار نمی‌گذارد، هم برخلافِ
+// «۳۰۰ تای آخر» با گذشت زمان به همه‌ی ردیف‌های قدیمی هم می‌رسد.
+if ($rxCron) $rxLimit = 60;
+$rxOrder = $rxCron ? 'RAND()' : 'id_invoice DESC';
 
 // نمای کلیِ وضعیت فاکتورها — کمک می‌کند بفهمیم چه چیزی بیرون از دامنه‌ی سوییپ است.
-rx_out("وضعیت فاکتورها در دیتابیس:");
-foreach ($pdo->query("SELECT Status, COUNT(*) c FROM invoice GROUP BY Status ORDER BY c DESC")->fetchAll(PDO::FETCH_ASSOC) as $r) {
-    rx_out(sprintf("   %-18s %d", $r['Status'], $r['c']));
+if (!$rxCron) {
+    rx_out("وضعیت فاکتورها در دیتابیس:");
+    foreach ($pdo->query("SELECT Status, COUNT(*) c FROM invoice GROUP BY Status ORDER BY c DESC")->fetchAll(PDO::FETCH_ASSOC) as $r) {
+        rx_out(sprintf("   %-18s %d", $r['Status'], $r['c']));
+    }
+    rx_out("");
 }
-rx_out("");
 
 $stmt = $pdo->prepare(
     "SELECT id_invoice, username, Service_location, Status
        FROM invoice
       WHERE Status IN ('disabled', 'removeTime', 'removevolume')
         AND username IS NOT NULL AND username != ''
-   ORDER BY id_invoice DESC
+   ORDER BY {$rxOrder}
       LIMIT {$rxLimit}"
 );
 $stmt->execute();
@@ -178,3 +199,19 @@ rx_out("روی پنل فعال (رد شد) : {$skippedActive}");
 rx_out("از قبل روی پنل نبود  : {$alreadyGone}");
 rx_out("زمان                 : " . round(microtime(true) - $rxStart, 1) . " ثانیه");
 if (!$rxApply && $orphan > 0) rx_out("\nبرای حذف واقعی همین آدرس را با &apply=1 باز کنید.");
+
+if ($rxCron && ($deleted > 0 || $failed > 0)) {
+    $line = "[orphan_cleanup] بررسی {$i} | حذف {$deleted} | ناموفق {$failed} | فعال رد شد {$skippedActive}";
+    error_log($line);
+    $ch = function_exists('select') ? select("setting", "*", null, null, "select") : null;
+    $chat = is_array($ch) ? (string) ($ch['Channel_Report'] ?? '') : '';
+    if ($chat !== '' && function_exists('telegram')) {
+        $topic = select("topicid", "idreport", "report", "otherreport", "select")['idreport'] ?? '';
+        telegram('sendmessage', [
+            'chat_id' => $chat,
+            'message_thread_id' => $topic,
+            'text' => "🧹 پاکسازی خودکار کانفیگ‌های یتیم\n\nبررسی‌شده : {$i}\nحذف‌شده از پنل : {$deleted}\nناموفق : {$failed}",
+            'parse_mode' => 'HTML',
+        ]);
+    }
+}
