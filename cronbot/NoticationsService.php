@@ -205,10 +205,22 @@ class ServiceMonitor
         ][$userData['status']];
         $remainingVolume = formatBytes($userData['data_limit'] - $userData['used_traffic']);
         if ($result) {
+            // [FIX کانفیگ‌های پاک‌نشده روی پنل]
+            // اول روی پنل حذف می‌کنیم و نتیجه را می‌خوانیم. قبلاً فاکتور
+            // بی‌قیدوشرط removeTime می‌خورد و چون کرون فقط فاکتورهای «فعال» را
+            // می‌خواند، یک بار شکستِ حذف یعنی آن کانفیگ برای همیشه روی پنل
+            // جا می‌ماند و ربات فکر می‌کرد کارش تمام شده.
+            $rxRemoved = $this->Panel->RemoveUser($invoice['Service_location'], $username);
+            if (!is_array($rxRemoved) || ($rxRemoved['status'] ?? '') !== 'successful') {
+                error_log('[cron:notifications] حذف روی پنل ناموفق بود، فاکتور باز نگه داشته شد: '
+                    . $username . ' @ ' . $invoice['Service_location']
+                    . ' — ' . json_encode($rxRemoved, JSON_UNESCAPED_UNICODE));
+                $this->sendReportNotification("⚠️ حذف خودکار سرویس روی پنل ناموفق بود\n\nنام کاربری : <code>{$username}</code>\nپنل : {$invoice['Service_location']}\n\nربات دوباره تلاش می‌کند؛ اگر تکرار شد دستی بررسی کنید.");
+                return;
+            }
             update("invoice", "status", "removeTime", "id_invoice", $invoice['id_invoice']);
             // مهر زمان حذف، مبنای پاکسازی خودکار بعدی (purgeRemovedInvoices).
             update("invoice", "removed_at", time(), "id_invoice", $invoice['id_invoice']);
-            $this->Panel->RemoveUser($invoice['Service_location'], $username);
             $message = "📌 کاربر گرامی بدلیل عدم تمدید، سرویس {$invoice['username']} از لیست سرویس های شما حذف گردید\n\n🌟 جهت تهیه سرویس جدید از بخش خرید سرویس اقدام فرمایید";
             $reportMessage = "📌 اطلاعیه کرون حذف\n\nنام کاربری سرویس :‌ <code>{$invoice['username']}</code>\nوضعیت سرویس : $statusText\nتعداد روز باقی مانده ‌:‌$daysRemaining\nحجم باقی مانده : $remainingVolume";
             $shouldNotify = !empty($user['status_cron'] ?? null);
@@ -245,10 +257,18 @@ class ServiceMonitor
         ][$userData['status']];
         $remainingVolume = formatBytes($userData['data_limit'] - $userData['used_traffic']);
         if ($result) {
+            // [FIX کانفیگ‌های پاک‌نشده روی پنل] — مثل shouldRemoveService
+            $rxRemoved = $this->Panel->RemoveUser($invoice['Service_location'], $username);
+            if (!is_array($rxRemoved) || ($rxRemoved['status'] ?? '') !== 'successful') {
+                error_log('[cron:notifications] حذف حجمی روی پنل ناموفق بود، فاکتور باز نگه داشته شد: '
+                    . $username . ' @ ' . $invoice['Service_location']
+                    . ' — ' . json_encode($rxRemoved, JSON_UNESCAPED_UNICODE));
+                $this->sendReportNotification("⚠️ حذف خودکار سرویس روی پنل ناموفق بود\n\nنام کاربری : <code>{$username}</code>\nپنل : {$invoice['Service_location']}\n\nربات دوباره تلاش می‌کند؛ اگر تکرار شد دستی بررسی کنید.");
+                return;
+            }
             update("invoice", "status", "removevolume", "id_invoice", $invoice['id_invoice']);
             // مهر زمان حذف، مبنای پاکسازی خودکار بعدی (purgeRemovedInvoices).
             update("invoice", "removed_at", time(), "id_invoice", $invoice['id_invoice']);
-            $this->Panel->RemoveUser($invoice['Service_location'], $username);
             $message = "📌 کاربر گرامی بدلیل عدم تمدید، سرویس $username از لیست سرویس های شما حذف گردید
 
 🌟 جهت تهیه سرویس جدید از بخش خرید سرویس اقدام فرمایید";

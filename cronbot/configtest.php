@@ -42,7 +42,19 @@ foreach ($datatxtbot as $item) {
         $user = select("user","*","id",$result['id_user'],"select");
         $get_username_Check = $ManagePanel->DataUser($result['Service_location'],$result['username']);
     if (!in_array($get_username_Check['status'],['active','on_hold',"Unsuccessful","disabled"])) {
-            $ManagePanel->RemoveUser($result['Service_location'],$resultt);
+        // [FIX کانفیگ‌های پاک‌نشده روی پنل]
+        // نتیجه‌ی حذف نادیده گرفته می‌شد و فاکتور بی‌قیدوشرط disabled می‌خورد.
+        // کوئریِ بالا فقط status != 'disabled' را می‌خواند، پس یک بار شکستِ
+        // حذف یعنی آن کانفیگ دیگر هرگز بررسی نمی‌شود و تا ابد روی پنل می‌ماند.
+        // حالا فقط وقتی فاکتور را می‌بندیم که پنل واقعاً حذف کرده باشد؛ وگرنه
+        // ردیف باز می‌ماند تا اجرای بعدی دوباره تلاش کند.
+        $rxRemoved = $ManagePanel->RemoveUser($result['Service_location'],$resultt);
+        if (!is_array($rxRemoved) || ($rxRemoved['status'] ?? '') !== 'successful') {
+            error_log('[cron:configtest] حذف روی پنل ناموفق بود، فاکتور باز نگه داشته شد: '
+                . $resultt . ' @ ' . $result['Service_location']
+                . ' — ' . json_encode($rxRemoved, JSON_UNESCAPED_UNICODE));
+            continue;
+        }
         update("invoice","status","disabled","username",$resultt);
         if(intval($user['status_cron']) != 0){
          $Response = json_encode([

@@ -1575,27 +1575,49 @@ class ManagePanel
         $Get_Data_Panel = $this->loadPanel($name_panel, "name_panel");
         if (in_array($Get_Data_Panel['type'], ["marzban", "pasargard"], true)) {
             $UsernameData = removeuser($Get_Data_Panel['name_panel'], $username);
-            if (!empty($UsernameData['status']) && $UsernameData['status'] != 200) {
-                return array(
-                    'status' => 'Unsuccessful',
-                    'msg' => $UsernameData['status']
-                );
-            } elseif (!empty($UsernameData['error'])) {
+            if (!empty($UsernameData['error'])) {
                 return array(
                     'status' => 'Unsuccessful',
                     'msg' => $UsernameData['error']
                 );
             }
-            $UsernameData = json_decode($UsernameData['body'], true);
-            if ($UsernameData['detail'] != "User successfully deleted") {
-                $Output = array(
-                    'status' => 'Unsuccessful',
-                    'msg' => $UsernameData['detail']
-                );
-            } else {
+            // [FIX کانفیگ‌های پاک‌نشده روی پنل]
+            // موفقیت فقط با یک جمله‌ی انگلیسیِ دقیق سنجیده می‌شد
+            // («User successfully deleted») و هر کدِ غیرِ ۲۰۰ خطا حساب می‌شد.
+            // پاسخِ استانداردِ DELETE در پنل‌های تازه‌تر ۲۰۴ با بدنه‌ی خالی است،
+            // پس حذفِ موفق «ناموفق» گزارش می‌شد؛ و چون صدازننده‌ها نتیجه را
+            // نگاه نمی‌کردند، فاکتور «حذف‌شده» علامت می‌خورد و کاربر تا ابد
+            // روی پنل می‌ماند. حالا هر نشانه‌ی معقولِ موفقیت را می‌پذیریم.
+            $code = isset($UsernameData['status']) && is_numeric($UsernameData['status'])
+                ? (int) $UsernameData['status'] : null;
+            $body = isset($UsernameData['body']) ? (string) $UsernameData['body'] : '';
+            $decoded = json_decode($body, true);
+            $detail = '';
+            if (is_array($decoded)) {
+                foreach (['detail', 'message', 'msg'] as $k) {
+                    if (!empty($decoded[$k]) && is_string($decoded[$k])) { $detail = $decoded[$k]; break; }
+                }
+            }
+            // «کاربر پیدا نشد» هم یعنی هدف حاصل شده: دیگر روی پنل نیست.
+            $gone = ($code === 404) || (stripos($detail, 'not found') !== false);
+            $okCode = in_array($code, array(200, 202, 204), true) || $code === null;
+            $okBody = ($detail === '')
+                || stripos($detail, 'success') !== false
+                || stripos($detail, 'delete') !== false
+                || stripos($detail, 'removed') !== false;
+
+            if ($gone || ($okCode && $okBody)) {
                 $Output = array(
                     'status' => 'successful',
                     'username' => $username,
+                );
+            } else {
+                error_log('[panels] RemoveUser failed for ' . $username
+                    . ' on ' . (string) $Get_Data_Panel['name_panel']
+                    . ' — http=' . var_export($code, true) . ' body=' . substr($body, 0, 200));
+                $Output = array(
+                    'status' => 'Unsuccessful',
+                    'msg' => $detail !== '' ? $detail : ('HTTP ' . var_export($code, true))
                 );
             }
         } elseif ($Get_Data_Panel['type'] == "marzneshin") {
