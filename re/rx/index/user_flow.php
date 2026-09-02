@@ -331,7 +331,11 @@ if ($user['step'] == "createusertest" || preg_match('/locationtest_(.*)/', $data
     deletemessage($from_id, $message_id);
     sendmessage($from_id, "📌 پیام خود را ارسال نمایید", $backuser, 'HTML');
     step("gettextticket", $from_id);
-} elseif ($user['step'] == "gettextticket" && $text) {
+} elseif ($user['step'] == "gettextticket"
+    && (trim((string) $text) !== '' || trim((string) $caption) !== '' || $photo || $video)) {
+    // [FIX تیکتِ عکس‌دار] شرطِ قبلی فقط $text را می‌دید. تلگرام برای پیامِ متنی
+    // فیلد text و برای عکس/ویدیو فیلد caption می‌فرستد، پس مشتری‌ای که
+    // اسکرین‌شات با توضیح می‌فرستاد اصلاً تیکتش ساخته نمی‌شد.
     $userdata = json_decode($user['Processing_value'], true);
     $departeman = select("departman", "*", "id", $userdata['iddeparteman'], "select");
     $time = date('Y/m/d H:i:s');
@@ -339,11 +343,12 @@ if ($user['step'] == "createusertest" || preg_match('/locationtest_(.*)/', $data
     $randomString = bin2hex(random_bytes(4));
     $stmt = $pdo->prepare("INSERT IGNORE INTO support_message (Tracking,idsupport,iduser,name_departman,text,time,status) VALUES (:Tracking,:idsupport,:iduser,:name_departman,:text,:time,:status)");
     $status = "Unseen";
+    $rxTicketBody = rx_ticket_message_body($text, $caption);
     $stmt->bindParam(':Tracking', $randomString);
     $stmt->bindParam(':idsupport', $departeman['idsupport']);
     $stmt->bindParam(':iduser', $from_id);
     $stmt->bindParam(':name_departman', $departeman['name_departman']);
-    $stmt->bindParam(':text', $text, PDO::PARAM_STR);
+    $stmt->bindParam(':text', $rxTicketBody, PDO::PARAM_STR);
     $stmt->bindParam(':time', $time);
     $stmt->bindParam(':status', $status);
     $stmt->execute();
@@ -362,7 +367,7 @@ if ($user['step'] == "createusertest" || preg_match('/locationtest_(.*)/', $data
 نام کاربری کاربر : @$username
 نام دپارتمان : {$departeman['name_departman']}
 
-متن پیام : $text $caption";
+متن پیام : $rxTicketBody";
     $Response = json_encode([
         'inline_keyboard' => [
             [
@@ -420,13 +425,23 @@ if ($user['step'] == "createusertest" || preg_match('/locationtest_(.*)/', $data
         return;
     }
     $time = date('Y/m/d H:i:s');
-    update("support_message", "status", "Answered", "Tracking", $user['Processing_value']);
-    update("support_message", "result", $text, "Tracking", $user['Processing_value']);
+    // [FIX پاسخِ خالیِ پشتیبانی]
+    // فقط $text خوانده می‌شد. اگر پشتیبان عکس/ویدیو همراه با توضیح می‌فرستاد،
+    // متن در $caption می‌نشست و مشتری پیامی می‌گرفت که جلوی «متن پیام :» خالی
+    // بود — و خودِ عکس هم اصلاً برایش فرستاده نمی‌شد. ضمناً تیکت پیش از ارسال
+    // «پاسخ داده شده» علامت می‌خورد، پس اگر ارسال شکست می‌خورد (مثلاً مشتری
+    // ربات را بلاک کرده بود) نه مشتری چیزی می‌گرفت نه پشتیبان می‌توانست دوباره
+    // جواب بدهد — و به پشتیبان هم «با موفقیت ارسال شد» گفته می‌شد.
+    $rxReplyBody = rx_ticket_message_body($text, $caption);
+    if ($rxReplyBody === '' && !$photo && !$video) {
+        sendmessage($from_id, "❌ متن پاسخ خالی بود و چیزی ارسال نشد.\n\nلطفاً متن پیام را بفرستید (یا عکس/ویدیو همراه با توضیح).", null, 'HTML');
+        return;   // در همین مرحله می‌ماند تا دوباره بفرستد
+    }
     $textSendAdminToUser = "
 📩 یک پیام از سمت مدیریت برای شما ارسال گردید.
 
 متن پیام :
-$text";
+" . ($rxReplyBody !== '' ? $rxReplyBody : '(بدون متن — فایل پیوست ارسال شد)');
     $Response = json_encode([
         'inline_keyboard' => [
             [
@@ -434,7 +449,20 @@ $text";
             ],
         ]
     ]);
-    sendmessage($trakingdetail['iduser'], $textSendAdminToUser, $Response, 'HTML');
+    // عکس/ویدیوی پشتیبان هم باید به دست مشتری برسد — مسیرِ برعکس این کار را
+    // می‌کرد ولی این یکی نه.
+    if ($photo) sendphoto($trakingdetail['iduser'], $photoid, null);
+    if ($video) sendvideo($trakingdetail['iduser'], $videoid, null);
+    $rxSent = sendmessage($trakingdetail['iduser'], $textSendAdminToUser, $Response, 'HTML');
+    if (!is_array($rxSent) || empty($rxSent['ok'])) {
+        $rxWhy = is_array($rxSent) ? trim((string) ($rxSent['description'] ?? '')) : '';
+        error_log('[support] پاسخ به مشتری نرسید — iduser=' . $trakingdetail['iduser'] . ' : ' . $rxWhy);
+        sendmessage($from_id, "❌ پاسخ به مشتری نرسید" . ($rxWhy !== '' ? " ({$rxWhy})" : '')
+            . ".\n\nتیکت باز نگه داشته شد؛ می‌توانید دوباره بفرستید.", null, 'HTML');
+        return;
+    }
+    update("support_message", "status", "Answered", "Tracking", $user['Processing_value']);
+    update("support_message", "result", $rxReplyBody, "Tracking", $user['Processing_value']);
     sendmessage($from_id, "پیام با موفقیت ارسال گردید", null, 'HTML');
     step("home", $from_id);
 } elseif (preg_match('/Responsesusera_(\w+)/', $datain, $dataget)) {
@@ -451,11 +479,12 @@ $text";
     $randomString = bin2hex(random_bytes(4));
     $stmt = $pdo->prepare("INSERT IGNORE INTO support_message (Tracking,idsupport,iduser,name_departman,text,time,status) VALUES (:Tracking,:idsupport,:iduser,:name_departman,:text,:time,:status)");
     $status = "Customerresponse";
+    $rxFollowBody = rx_ticket_message_body($text, $caption);
     $stmt->bindParam(':Tracking', $randomString);
     $stmt->bindParam(':idsupport', $trakingdetail['idsupport']);
     $stmt->bindParam(':iduser', $trakingdetail['iduser']);
     $stmt->bindParam(':name_departman', $trakingdetail['name_departman']);
-    $stmt->bindParam(':text', $text, PDO::PARAM_STR);
+    $stmt->bindParam(':text', $rxFollowBody, PDO::PARAM_STR);
     $stmt->bindParam(':time', $time);
     $stmt->bindParam(':status', $status);
     $stmt->execute();
@@ -468,7 +497,7 @@ $text";
 نام کاربری کاربر : @$username
 نام دپارتمان : {$trakingdetail['name_departman']}
 
-متن پیام : $text";
+متن پیام : $rxFollowBody";
     $Response = json_encode([
         'inline_keyboard' => [
             [

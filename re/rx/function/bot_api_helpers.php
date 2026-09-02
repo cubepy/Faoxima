@@ -1070,3 +1070,22 @@ function CreatePaymentNv($invoice_id, $amount)
     curl_close($ch);
     return json_decode($result, true);
 }
+if (!function_exists('rx_ticket_message_body')) {
+    /**
+     * متنِ یک پیامِ تیکت را برمی‌گرداند.
+     *
+     * تلگرام برای پیامِ متنی فیلد text و برای عکس/ویدیو فیلد caption می‌فرستد؛
+     * هیچ‌وقت هر دو. چند جای مسیرِ پشتیبانی فقط $text را می‌خواندند، پس وقتی
+     * پشتیبان یا مشتری «عکس همراه با توضیح» می‌فرستاد، طرفِ مقابل پیامی با
+     * «متن پیام :» خالی می‌گرفت.
+     */
+    function rx_ticket_message_body($text, $caption): string
+    {
+        $parts = array();
+        foreach (array($text, $caption) as $piece) {
+            $piece = trim((string) $piece);
+            if ($piece !== '') $parts[] = $piece;
+        }
+        return implode("\n", $parts);
+    }
+}
