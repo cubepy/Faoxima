@@ -1,0 +1,1119 @@
+<!doctype html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>مرکز دانلود کیوب</title>
+<meta name="description" content="دانلود آخرین نسخه اپلیکیشن اختصاصی CubeVPN و v2rayNG" />
+<meta name="theme-color" content="#05060F" />
+<meta name="color-scheme" content="dark" />
+
+<!--
+  ┌──────────────────────────────────────────────────────────────────────┐
+  │  مرکز دانلود کیوب — صفحه‌ی کاملاً خودبسنده                            │
+  │                                                                      │
+  │  مهم: این صفحه را کسانی باز می‌کنند که «هنوز VPN ندارند».            │
+  │  به همین دلیل عمداً هیچ فونت، اسکریپت، تصویر یا CDN خارجی            │
+  │  بارگذاری نمی‌شود. همه چیز داخل همین یک فایل است.                     │
+  │                                                                      │
+  │  برای ویرایش: تنها چیزی که معمولاً لازم است عوض کنید بخش CONFIG      │
+  │  در ابتدای اسکریپت پایین صفحه است (آیدی پشتیبانی و ریپوها).          │
+  └──────────────────────────────────────────────────────────────────────┘
+-->
+
+<style>
+:root{
+  /* فضا و سطح */
+  --void:#05060F;          /* زمینه‌ی اصلی */
+  --deep:#0B0E20;          /* سطح کارت */
+  --deep-2:#11142B;        /* سطح بالاتر */
+  --line:rgba(139,146,199,.16);
+  --line-strong:rgba(139,146,199,.30);
+
+  /* لهجه */
+  --indigo:#5B4BFF;
+  --violet:#8B5CF6;
+  --ice:#C7D2FE;
+
+  /* متن — خاکستریِ متمایل به بنفش، نه خنثی */
+  --ink:#EEF0FF;
+  --muted:#8A90B8;
+  --faint:#5D6389;
+
+  --ok:#34D399;
+
+  /* رنگِ سرتیترِ پلتفرم — عمداً از سفیدِ متنِ بدنه جدا است */
+  --heading:#A9B4FF;
+
+  --r-lg:22px;
+  --r-md:16px;
+  --r-pill:999px;
+
+  --shadow-glow:0 18px 50px -18px rgba(91,75,255,.75);
+
+  --fa: "Vazirmatn","IRANSansX","IRANSans","SF Arabic","Geeza Pro",
+        "Noto Naskh Arabic","Droid Arabic Naskh","Segoe UI",Tahoma,sans-serif;
+  --latin: ui-sans-serif,-apple-system,"SF Pro Display","Segoe UI",Roboto,
+        "Helvetica Neue",Arial,sans-serif;
+}
+
+*,*::before,*::after{box-sizing:border-box}
+
+html{-webkit-text-size-adjust:100%}
+
+body{
+  margin:0;
+  min-height:100dvh;
+  background:var(--void);
+  color:var(--ink);
+  font-family:var(--fa);
+  font-size:16px;
+  line-height:1.75;
+  overflow-x:hidden;
+  -webkit-font-smoothing:antialiased;
+}
+
+/* ستاره‌ها پشت همه چیز */
+#stars{
+  position:fixed;
+  inset:0;
+  width:100%;
+  height:100%;
+  z-index:0;
+  pointer-events:none;
+}
+/* هاله‌ی نور مرکزی */
+body::after{
+  content:"";
+  position:fixed;
+  left:50%;
+  top:-14%;
+  width:min(860px,150vw);
+  aspect-ratio:1;
+  transform:translateX(-50%);
+  background:radial-gradient(circle at 50% 50%,
+      rgba(91,75,255,.30) 0%,
+      rgba(91,75,255,.10) 38%,
+      rgba(5,6,15,0) 68%);
+  z-index:0;
+  pointer-events:none;
+}
+
+.wrap{
+  position:relative;
+  z-index:1;
+  width:100%;
+  max-width:680px;
+  margin-inline:auto;
+  padding:0 20px 64px;
+}
+
+/* ───────── نوار بالا ───────── */
+.topbar{
+  display:flex;
+  align-items:center;
+  justify-content:space-between;
+  gap:16px;
+  padding:18px 0 8px;
+}
+.brand{
+  display:inline-flex;
+  align-items:center;
+  gap:9px;
+  color:var(--ink);
+  text-decoration:none;
+  font-family:var(--latin);
+  font-weight:800;
+  font-size:14px;
+  letter-spacing:.18em;
+}
+.brand svg{display:block;filter:drop-shadow(0 0 10px rgba(91,75,255,.7))}
+.topnav{
+  display:flex;
+  gap:18px;
+  font-size:13px;
+}
+.topnav a{
+  color:var(--muted);
+  text-decoration:none;
+  transition:color .18s ease;
+}
+.topnav a:hover,.topnav a:focus-visible{color:var(--ice)}
+
+/* ───────── هیرو ───────── */
+.hero{
+  text-align:center;
+  padding:22px 0 6px;
+}
+
+.orbit{
+  width:min(300px,72vw);
+  margin:0 auto 22px;
+  display:block;
+}
+.orbit .ring{
+  transform-origin:150px 150px;
+  animation:spin 34s linear infinite;
+}
+.orbit .ring-2{animation-duration:52s;animation-direction:reverse}
+.orbit .core{
+  transform-origin:150px 150px;
+  animation:bob 7s ease-in-out infinite;
+}
+@keyframes spin{to{transform:rotate(360deg)}}
+@keyframes bob{
+  0%,100%{transform:translateY(0) rotate(-8deg)}
+  50%    {transform:translateY(-9px) rotate(4deg)}
+}
+
+.eyebrow{
+  display:inline-flex;
+  align-items:center;
+  gap:9px;
+  padding:7px 16px;
+  border:1px solid var(--line);
+  border-radius:var(--r-pill);
+  background:rgba(17,20,43,.55);
+  font-family:var(--latin);
+  font-size:10.5px;
+  font-weight:600;
+  letter-spacing:.24em;
+  color:var(--muted);
+  text-transform:uppercase;
+}
+.eyebrow .dot{
+  width:6px;height:6px;border-radius:50%;
+  background:var(--indigo);
+  box-shadow:0 0 10px 2px rgba(91,75,255,.9);
+}
+
+h1{
+  margin:18px 0 0;
+  font-family:var(--latin);
+  font-size:clamp(38px,13vw,58px);
+  font-weight:900;
+  letter-spacing:-.02em;
+  line-height:.95;
+  text-wrap:balance;
+  background:linear-gradient(180deg,#FFFFFF 0%,#A9B4FF 108%);
+  -webkit-background-clip:text;
+  background-clip:text;
+  color:transparent;
+}
+.hero .fa-title{
+  margin:14px 0 0;
+  font-size:clamp(19px,5.2vw,23px);
+  font-weight:800;
+  line-height:1.6;
+  color:var(--ink);
+  text-wrap:balance;
+}
+.hero p{
+  margin:12px auto 0;
+  max-width:44ch;
+  color:var(--muted);
+  font-size:14.5px;
+}
+
+/* ───────── کارت‌ها ───────── */
+.stack{
+  display:flex;
+  flex-direction:column;
+  gap:18px;
+}
+
+.card{
+  position:relative;
+  border:1px solid var(--line);
+  border-radius:var(--r-lg);
+  background:linear-gradient(180deg,rgba(17,20,43,.82) 0%,rgba(11,14,32,.82) 100%);
+  padding:22px;
+}
+
+/* کارت شاخص: قابِ گرادیانی */
+.card.featured{
+  border-color:transparent;
+  background:
+    linear-gradient(180deg,rgba(23,26,56,.92) 0%,rgba(12,15,36,.92) 100%) padding-box,
+    linear-gradient(150deg,var(--indigo) 0%,var(--violet) 46%,rgba(91,75,255,.15) 100%) border-box;
+  border:1px solid transparent;
+  box-shadow:0 24px 60px -34px rgba(91,75,255,.9);
+}
+
+.card-head{
+  display:flex;
+  align-items:flex-start;
+  gap:14px;
+}
+.logo{
+  flex:none;
+  width:52px;height:52px;
+  border-radius:15px;
+  display:grid;place-items:center;
+  border:1px solid var(--line);
+  background:var(--deep-2);
+}
+.logo.cube{
+  background:linear-gradient(145deg,var(--indigo),var(--violet));
+  border-color:transparent;
+  box-shadow:var(--shadow-glow);
+}
+.card-title{
+  flex:1;
+  min-width:0;
+}
+.card-title .row{
+  display:flex;
+  align-items:center;
+  gap:10px;
+  flex-wrap:wrap;
+}
+.card-title h2{
+  margin:0;
+  font-family:var(--latin);
+  font-size:20px;
+  font-weight:800;
+  letter-spacing:-.01em;
+  color:var(--ink);
+}
+.card-title .sub{
+  margin:3px 0 0;
+  font-size:13px;
+  color:var(--muted);
+}
+
+.badge{
+  display:inline-block;
+  padding:4px 11px;
+  border-radius:var(--r-pill);
+  font-size:11px;
+  font-weight:700;
+  line-height:1.9;
+  white-space:nowrap;
+}
+.badge.own{
+  background:linear-gradient(135deg,var(--indigo),var(--violet));
+  color:#fff;
+  box-shadow:0 6px 18px -8px rgba(91,75,255,.9);
+}
+.badge.plain{
+  background:rgba(139,146,199,.13);
+  color:var(--muted);
+  border:1px solid var(--line);
+}
+
+.meta{
+  display:flex;
+  flex-wrap:wrap;
+  align-items:center;
+  gap:8px;
+  margin-top:16px;
+}
+.chip{
+  display:inline-flex;
+  align-items:center;
+  gap:7px;
+  padding:6px 12px;
+  border:1px solid var(--line);
+  border-radius:var(--r-pill);
+  background:rgba(5,6,15,.5);
+  font-size:12.5px;
+  color:var(--muted);
+}
+.chip b{
+  color:var(--ice);
+  font-family:var(--latin);
+  font-weight:700;
+  font-variant-numeric:tabular-nums;
+}
+.chip .live{
+  width:6px;height:6px;border-radius:50%;
+  background:var(--ok);
+  box-shadow:0 0 8px 1px rgba(52,211,153,.8);
+}
+.chip.loading b{color:var(--faint)}
+
+/* دکمه‌ها */
+.btn{
+  display:flex;
+  align-items:center;
+  justify-content:center;
+  gap:10px;
+  width:100%;
+  margin-top:18px;
+  padding:15px 20px;
+  border:0;
+  border-radius:var(--r-md);
+  font-family:inherit;
+  font-size:15.5px;
+  font-weight:800;
+  color:#fff;
+  text-decoration:none;
+  background:linear-gradient(135deg,var(--indigo) 0%,var(--violet) 100%);
+  box-shadow:var(--shadow-glow);
+  cursor:pointer;
+  transition:transform .16s ease,box-shadow .16s ease,filter .16s ease;
+}
+.btn:hover,.btn:focus-visible{
+  transform:translateY(-2px);
+  box-shadow:0 24px 60px -18px rgba(91,75,255,.95);
+  filter:saturate(1.08);
+}
+.btn:active{transform:translateY(0)}
+.btn.ghost{
+  background:rgba(139,146,199,.10);
+  border:1px solid var(--line-strong);
+  box-shadow:none;
+  color:var(--ink);
+}
+.btn.ghost:hover,.btn.ghost:focus-visible{
+  background:rgba(139,146,199,.16);
+  box-shadow:none;
+}
+.btn svg{flex:none}
+
+/* گزینه‌های معماری */
+.arch-label{
+  margin:20px 0 10px;
+  font-size:12.5px;
+  color:var(--faint);
+}
+.arch{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:9px;
+}
+.arch a{
+  display:flex;
+  flex-direction:column;
+  gap:2px;
+  padding:12px 14px;
+  border:1px solid var(--line);
+  border-radius:13px;
+  background:rgba(5,6,15,.45);
+  text-decoration:none;
+  color:var(--ink);
+  transition:border-color .16s ease,background .16s ease,transform .16s ease;
+}
+.arch a:hover,.arch a:focus-visible{
+  border-color:var(--indigo);
+  background:rgba(91,75,255,.10);
+  transform:translateY(-1px);
+}
+.arch a .n{
+  font-family:var(--latin);
+  font-size:13.5px;
+  font-weight:700;
+  letter-spacing:-.01em;
+}
+.arch a .d{font-size:11.5px;color:var(--muted)}
+.arch a.pick{border-color:rgba(91,75,255,.55);background:rgba(91,75,255,.12)}
+.arch a.pick .d{color:var(--ice)}
+
+.note{
+  margin:14px 0 0;
+  font-size:12.5px;
+  color:var(--faint);
+  line-height:1.85;
+}
+
+/* ───────── سرتیترِ پلتفرم ───────── */
+.platform{
+  position:relative;
+  display:flex;
+  align-items:center;
+  gap:14px;
+  /* margin بالای بلوک = فاصله‌ی خطِ جداکننده از کارتِ قبلی،
+     padding = فاصله‌ی عنوان از خط. بدون margin، خط دقیقاً به لبه‌ی
+     کارتِ بالایی می‌چسبید و اصلاً دیده نمی‌شد. */
+  margin:44px 0 22px;
+  padding-top:28px;
+}
+/* خطِ جداکننده‌ی بخش‌ها — از وسط پررنگ و به دو طرف محو می‌شود */
+.platform::before{
+  content:"";
+  position:absolute;
+  top:0;
+  left:0;
+  right:0;
+  height:1px;
+  background:linear-gradient(to left,
+      transparent 0%,
+      rgba(139,146,199,.14) 8%,
+      rgba(169,180,255,.55) 30%,
+      rgba(169,180,255,.55) 70%,
+      rgba(139,146,199,.14) 92%,
+      transparent 100%);
+}
+.pf-icon{
+  flex:none;
+  width:42px;height:42px;
+  border-radius:13px;
+  display:grid;place-items:center;
+  border:1px solid rgba(91,75,255,.35);
+  background:rgba(91,75,255,.14);
+  color:var(--heading);
+}
+.pf-icon svg{width:22px;height:22px}
+.pf-name{
+  margin:0;
+  font-size:23px;
+  font-weight:900;
+  letter-spacing:-.01em;
+  color:var(--heading);
+  white-space:nowrap;
+}
+
+/* ───────── جایگزین‌ها ───────── */
+.alts{
+  border:1px solid var(--line);
+  border-radius:var(--r-lg);
+  background:rgba(11,14,32,.55);
+  padding:18px;
+}
+.alts-title{
+  margin:0 0 12px;
+  font-size:12.5px;
+  color:var(--faint);
+}
+.alt-list{
+  display:flex;
+  flex-direction:column;
+  gap:8px;
+}
+.alt{
+  display:flex;
+  align-items:center;
+  gap:12px;
+  padding:12px 14px;
+  border:1px solid var(--line);
+  border-radius:13px;
+  background:rgba(5,6,15,.45);
+  text-decoration:none;
+  color:var(--ink);
+  transition:border-color .16s ease,background .16s ease,transform .16s ease;
+}
+.alt:hover,.alt:focus-visible{
+  border-color:var(--indigo);
+  background:rgba(91,75,255,.10);
+  transform:translateY(-1px);
+}
+.alt-n{
+  font-family:var(--latin);
+  font-size:14.5px;
+  font-weight:700;
+  letter-spacing:-.01em;
+}
+.alt-src{
+  flex:1;
+  font-size:11.5px;
+  color:var(--muted);
+}
+.alt-ver{
+  font-family:var(--latin);
+  font-size:11.5px;
+  font-weight:700;
+  color:var(--ice);
+  font-variant-numeric:tabular-nums;
+}
+.alt-ver:empty{display:none}
+.alt svg{flex:none;color:var(--faint)}
+.alt:hover svg,.alt:focus-visible svg{color:var(--ice)}
+
+/* ───────── راهنما ───────── */
+.help{
+  margin-top:34px;
+  border:1px solid var(--line);
+  border-radius:var(--r-lg);
+  background:rgba(11,14,32,.6);
+  padding:22px;
+}
+.help h3{
+  margin:0 0 14px;
+  font-size:15.5px;
+  font-weight:800;
+  color:var(--ink);
+}
+.steps{
+  margin:0;
+  padding:0;
+  list-style:none;
+  display:flex;
+  flex-direction:column;
+  gap:12px;
+  counter-reset:s;
+}
+.steps li{
+  display:flex;
+  gap:12px;
+  align-items:flex-start;
+  font-size:13.5px;
+  color:var(--muted);
+  counter-increment:s;
+}
+.steps li::before{
+  content:counter(s);
+  flex:none;
+  width:24px;height:24px;
+  margin-top:3px;
+  border-radius:50%;
+  display:grid;place-items:center;
+  background:rgba(91,75,255,.16);
+  border:1px solid rgba(91,75,255,.35);
+  color:var(--ice);
+  font-family:var(--latin);
+  font-size:12px;
+  font-weight:700;
+}
+
+footer{
+  margin-top:36px;
+  text-align:center;
+  font-size:12px;
+  color:var(--faint);
+}
+footer a{color:var(--muted);text-decoration:none}
+footer a:hover,footer a:focus-visible{color:var(--ice)}
+
+/* دسترسی‌پذیری */
+a:focus-visible,button:focus-visible{
+  outline:2px solid var(--ice);
+  outline-offset:3px;
+}
+[hidden]{display:none !important}
+
+@media (prefers-reduced-motion:reduce){
+  *{animation:none !important;transition:none !important}
+  .btn:hover{transform:none}
+}
+
+@media (max-width:380px){
+  .arch{grid-template-columns:1fr}
+}
+</style>
+</head>
+
+<body>
+<canvas id="stars" aria-hidden="true"></canvas>
+
+<div class="wrap">
+
+  <header class="topbar">
+    <a class="brand" href="https://cubesystem.top" rel="noopener">
+      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <path d="M12 2.5 20.5 7v10L12 21.5 3.5 17V7L12 2.5Z"
+              stroke="#8B93FF" stroke-width="1.5" stroke-linejoin="round"/>
+        <path d="M12 2.5 20.5 7 12 11.5 3.5 7 12 2.5Z" fill="#5B4BFF" fill-opacity=".55"/>
+      </svg>
+      CUBE
+    </a>
+    <nav class="topnav">
+      <a href="https://cubesystem.top" rel="noopener">اکوسیستم</a>
+      <a href="#help">راهنما</a>
+    </nav>
+  </header>
+
+  <section class="hero">
+    <svg class="orbit" viewBox="0 0 300 300" fill="none" aria-hidden="true">
+      <ellipse class="ring" cx="150" cy="150" rx="126" ry="47"
+               stroke="rgba(139,146,199,.28)" stroke-width="1"/>
+      <ellipse class="ring ring-2" cx="150" cy="150" rx="112" ry="112"
+               stroke="rgba(91,75,255,.34)" stroke-width="1"
+               stroke-dasharray="3 9"/>
+      <rect x="86" y="86" width="128" height="128"
+            stroke="rgba(139,146,199,.30)" stroke-width="1"/>
+      <g class="core">
+        <rect x="115" y="115" width="70" height="70" rx="9"
+              fill="url(#g1)" transform="rotate(-14 150 150)"/>
+      </g>
+      <defs>
+        <linearGradient id="g1" x1="115" y1="115" x2="185" y2="185"
+                        gradientUnits="userSpaceOnUse">
+          <stop stop-color="#6E5BFF"/>
+          <stop offset="1" stop-color="#3D2ECC"/>
+        </linearGradient>
+      </defs>
+    </svg>
+
+    <span class="eyebrow"><span class="dot"></span>DOWNLOAD CENTER</span>
+    <h1>CUBE&nbsp;APPS</h1>
+    <p class="fa-title">اپلیکیشن‌های رسمی کیوب</p>
+    <p>آخرین نسخه‌ی اپلیکیشن اختصاصی ما و کلاینت‌های پیشنهادی — همیشه مستقیم از منبع رسمی.</p>
+  </section>
+
+  <div class="platform">
+    <span class="pf-icon" aria-hidden="true"><svg  viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M6 11.5A1.5 1.5 0 0 1 7.5 10h9a1.5 1.5 0 0 1 1.5 1.5V17a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2v-5.5Z" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/><path d="M8.8 9.6 7.4 7.2M15.2 9.6l1.4-2.4" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/><circle cx="10" cy="13.2" r=".9" fill="currentColor"/><circle cx="14" cy="13.2" r=".9" fill="currentColor"/></svg></span>
+    <h2 class="pf-name">اندروید</h2>
+  </div>
+
+  <div class="stack">
+
+    <!-- ── CubeVPN — اپ اختصاصی ── -->
+    <article class="card featured">
+      <div class="card-head">
+        <div class="logo cube" aria-hidden="true">
+          <svg width="26" height="26" viewBox="0 0 24 24" fill="none">
+            <path d="M12 2.5 20.5 7v10L12 21.5 3.5 17V7L12 2.5Z"
+                  stroke="#fff" stroke-width="1.6" stroke-linejoin="round"/>
+            <path d="M12 11.5 20.5 7M12 11.5v10M12 11.5 3.5 7"
+                  stroke="#fff" stroke-width="1.6" stroke-linejoin="round"
+                  stroke-opacity=".75"/>
+          </svg>
+        </div>
+        <div class="card-title">
+          <div class="row">
+            <h2 dir="ltr">CubeVPN</h2>
+            <span class="badge own">اختصاصی</span>
+          </div>
+          <p class="sub">اپلیکیشن اختصاصی کیوب، بر پایه‌ی Xray</p>
+        </div>
+      </div>
+
+      <div class="meta">
+        <span class="chip loading" id="cube-ver">
+          <span class="live" aria-hidden="true"></span>
+          <span class="lbl">آخرین نسخه:</span> <b dir="ltr">در حال بررسی…</b>
+        </span>
+        <span class="chip">اندروید</span>
+      </div>
+
+      <a class="btn" id="cube-btn"
+         href="cubevpn.php"
+         rel="noopener">
+        <svg width="19" height="19" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+          <path d="M12 3v12m0 0 4.5-4.5M12 15l-4.5-4.5M4 17.5v1A2.5 2.5 0 0 0 6.5 21h11a2.5 2.5 0 0 0 2.5-2.5v-1"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+        </svg>
+        دانلود CubeVPN
+      </a>
+
+      <p class="note">نسخه‌ی رسمی و امضاشده‌ی ما. اگر قبلاً نصبش کرده‌اید، همین فایل را روی نسخه‌ی قبلی نصب کنید — اطلاعاتتان پاک نمی‌شود.</p>
+    </article>
+
+    <!-- ── v2rayNG ── -->
+    <article class="card">
+      <div class="card-head">
+        <div class="logo" aria-hidden="true">
+          <svg width="24" height="24" viewBox="0 0 24 24" fill="none">
+            <path d="M4 6.5 12 3l8 3.5-8 3.5-8-3.5Z" stroke="#9AA2D0" stroke-width="1.5" stroke-linejoin="round"/>
+            <path d="M4 12l8 3.5L20 12M4 17.5 12 21l8-3.5"
+                  stroke="#9AA2D0" stroke-width="1.5" stroke-linejoin="round" stroke-opacity=".6"/>
+          </svg>
+        </div>
+        <div class="card-title">
+          <div class="row">
+            <h2 dir="ltr">v2rayNG</h2>
+            <span class="badge plain">جایگزین</span>
+          </div>
+          <p class="sub">کلاینت عمومی و شناخته‌شده‌ی اندروید</p>
+        </div>
+      </div>
+
+      <div class="meta">
+        <span class="chip loading" id="ng-ver">
+          <span class="live" aria-hidden="true"></span>
+          <span class="lbl">آخرین نسخه:</span> <b dir="ltr">در حال بررسی…</b>
+        </span>
+        <span class="chip">اندروید</span>
+      </div>
+
+      <p class="arch-label">نسخه‌ی مناسب گوشی‌تان را انتخاب کنید:</p>
+      <div class="arch" id="ng-arch">
+        <a class="pick" href="https://github.com/2dust/v2rayNG/releases/latest" rel="noopener">
+          <span class="n" dir="ltr">arm64-v8a</span>
+          <span class="d">تقریباً همه‌ی گوشی‌ها</span>
+        </a>
+        <a href="https://github.com/2dust/v2rayNG/releases/latest" rel="noopener">
+          <span class="n" dir="ltr">armeabi-v7a</span>
+          <span class="d">گوشی‌های قدیمی</span>
+        </a>
+      </div>
+
+      <a class="btn ghost" href="https://github.com/2dust/v2rayNG/releases/latest" rel="noopener">
+        همه‌ی نسخه‌ها در گیت‌هاب
+      </a>
+    </article>
+
+    <div class="alts">
+      <p class="alts-title">اپلیکیشن‌های جایگزین</p>
+      <div class="alt-list">
+        <a class="alt" href="https://play.google.com/store/apps/details?id=com.happproxy" target="_blank" rel="noopener">
+          <span class="alt-n" dir="ltr">Happ</span>
+          <span class="alt-src">Google Play</span>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 17 17 7M17 7H9m8 0v8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+        <a class="alt" href="https://play.google.com/store/apps/details?id=com.v2raytun.android" target="_blank" rel="noopener">
+          <span class="alt-n" dir="ltr">v2rayTun</span>
+          <span class="alt-src">Google Play</span>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 17 17 7M17 7H9m8 0v8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <div class="platform">
+    <span class="pf-icon" aria-hidden="true"><svg  viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M17.05 12.53c-.02-2.2 1.8-3.26 1.88-3.31-1.03-1.5-2.62-1.71-3.19-1.73-1.36-.14-2.65.8-3.34.8-.69 0-1.75-.78-2.88-.76-1.48.02-2.85.86-3.61 2.18-1.54 2.67-.39 6.62 1.11 8.79.73 1.06 1.6 2.25 2.74 2.21 1.1-.04 1.51-.71 2.84-.71 1.32 0 1.7.71 2.86.69 1.18-.02 1.93-1.08 2.65-2.15.84-1.23 1.18-2.42 1.2-2.48-.03-.01-2.3-.88-2.32-3.5Z"/><path d="M14.94 6.06c.6-.73 1.01-1.75.9-2.76-.87.04-1.92.58-2.55 1.31-.56.64-1.05 1.68-.92 2.67.97.08 1.96-.49 2.57-1.22Z"/></svg></span>
+    <h2 class="pf-name">آیفون و آیپد</h2>
+  </div>
+
+  <div class="stack">
+    <div class="alts">
+      <p class="alts-title">اشتراک خود را در یکی از این برنامه‌ها وارد کنید</p>
+      <div class="alt-list">
+        <a class="alt" href="https://apps.apple.com/us/app/streisand/id6450534064" target="_blank" rel="noopener">
+          <span class="alt-n" dir="ltr">Streisand</span>
+          <span class="alt-src">App Store</span>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 17 17 7M17 7H9m8 0v8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+        <a class="alt" href="https://apps.apple.com/us/app/v2box-v2ray-client/id6446814690" target="_blank" rel="noopener">
+          <span class="alt-n" dir="ltr">V2Box</span>
+          <span class="alt-src">App Store</span>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 17 17 7M17 7H9m8 0v8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+        <a class="alt" href="https://apps.apple.com/us/app/happ-proxy-utility/id6504287215" target="_blank" rel="noopener">
+          <span class="alt-n" dir="ltr">Happ</span>
+          <span class="alt-src">App Store</span>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 17 17 7M17 7H9m8 0v8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <div class="platform">
+    <span class="pf-icon" aria-hidden="true"><svg  viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M3 6.3 10.3 5.3v6.2H3V6.3Z"/><path d="M11.6 5.1 21 3.8v7.7h-9.4V5.1Z"/><path d="M3 12.8h7.3v6.2L3 17.9v-5.1Z"/><path d="M11.6 12.8H21v7.5l-9.4-1.3v-6.2Z"/></svg></span>
+    <h2 class="pf-name">ویندوز</h2>
+  </div>
+
+  <div class="stack">
+    <div class="alts">
+      <p class="alts-title">اشتراک خود را در یکی از این برنامه‌ها وارد کنید</p>
+      <div class="alt-list">
+        <a class="alt" id="win-v2rayn" href="https://github.com/2dust/v2rayN/releases/latest" target="_blank" rel="noopener">
+          <span class="alt-n" dir="ltr">v2rayN</span>
+          <span class="alt-src">GitHub</span>
+          <span class="alt-ver" id="win-v2rayn-ver"></span>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 17 17 7M17 7H9m8 0v8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+        <a class="alt" id="win-happ" href="https://github.com/Happ-proxy/happ-desktop/releases" target="_blank" rel="noopener">
+          <span class="alt-n" dir="ltr">Happ</span>
+          <span class="alt-src">GitHub</span>
+          <span class="alt-ver" id="win-happ-ver"></span>
+          <svg width="15" height="15" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M7 17 17 7M17 7H9m8 0v8" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+        </a>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── راهنما ── -->
+  <section class="help" id="help">
+    <h3>راهنمای نصب روی اندروید</h3>
+    <ol class="steps">
+      <li>فایل <span dir="ltr">APK</span> را دانلود کنید و روی آن بزنید.</li>
+      <li>اگر اندروید اجازه نداد، در همان پیام گزینه‌ی «تنظیمات» را بزنید و «نصب از این منبع» را روشن کنید.</li>
+      <li>پس از نصب، اشتراک خود را از ربات کپی کنید و در برنامه وارد کنید.</li>
+    </ol>
+    <p class="note">روی آیفون و ویندوز نیازی به این مراحل نیست — برنامه را از فروشگاه نصب کنید و فقط اشتراک را وارد کنید.</p>
+    <p class="note" id="dl-help" hidden>
+      اگر دانلود شروع نشد، یعنی دسترسی شما به گیت‌هاب باز نیست. در این حالت فایل را از داخل ربات دریافت کنید.
+    </p>
+  </section>
+
+  <footer>
+    <p>ساخته‌شده در <a href="https://cubesystem.top" rel="noopener">اکوسیستم کیوب</a></p>
+  </footer>
+
+</div>
+
+<script>
+(function () {
+  "use strict";
+
+  /* ═══════════════ CONFIG — در صورت نیاز این‌ها را عوض کنید ═══════════════ */
+  var CONFIG = {
+    // CubeVPN دیگر از api.github.com خوانده نمی‌شود: مخزن خصوصی شد و آن
+    // فراخوانی از مرورگرِ بازدیدکننده ۴۰۴ می‌گیرد. ضمناً فایلِ ریلیزِ خصوصی
+    // بدون توکن دانلود نمی‌شود و توکن را نمی‌شود اینجا گذاشت. cubevpn.php
+    // همین کار را سمتِ سرور انجام می‌دهد.
+    cubevpnInfo: "cubevpn.php?info=1",
+    v2rayng: { owner: "2dust",  repo: "v2rayNG" },
+    // ویندوز — لینکِ Happ که در دسترس بود آدرسِ «سازمان» است و ریلیز ندارد؛
+    // ریپوی واقعیِ نسخه‌ی دسکتاپ این است.
+    winApps: [
+      { id: "win-v2rayn", owner: "2dust",      repo: "v2rayN" },
+      { id: "win-happ",   owner: "Happ-proxy", repo: "happ-desktop" }
+    ],
+    apiTimeoutMs: 8000
+  };
+  /* ══════════════════════════════════════════════════════════════════════ */
+
+  /* ---------- ستاره‌ها ---------- */
+  var cv = document.getElementById("stars");
+  var reduce = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  if (cv && cv.getContext) {
+    var ctx = cv.getContext("2d"), stars = [], raf = null, w = 0, h = 0;
+
+    function build() {
+      var dpr = Math.min(window.devicePixelRatio || 1, 2);
+      w = cv.clientWidth; h = cv.clientHeight;
+      cv.width = Math.floor(w * dpr);
+      cv.height = Math.floor(h * dpr);
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+
+      // چگالی متناسب با مساحت، سقف‌دار تا روی موبایل سبک بماند
+      var n = Math.min(150, Math.round((w * h) / 9000));
+      stars = [];
+      for (var i = 0; i < n; i++) {
+        stars.push({
+          x: Math.random() * w,
+          y: Math.random() * h,
+          r: Math.random() * 1.25 + 0.35,
+          a: Math.random() * 0.55 + 0.20,
+          // بعضی ستاره‌ها آبی‌اند تا با لهجه‌ی صفحه هم‌خانواده باشند
+          blue: Math.random() < 0.22,
+          tw: Math.random() * 0.02 + 0.004,
+          dir: Math.random() < 0.5 ? 1 : -1
+        });
+      }
+    }
+
+    function paint() {
+      ctx.clearRect(0, 0, w, h);
+      for (var i = 0; i < stars.length; i++) {
+        var s = stars[i];
+        if (!reduce) {
+          s.a += s.tw * s.dir;
+          if (s.a >= 0.85) { s.a = 0.85; s.dir = -1; }
+          if (s.a <= 0.14) { s.a = 0.14; s.dir = 1; }
+        }
+        ctx.globalAlpha = s.a;
+        ctx.fillStyle = s.blue ? "#8B93FF" : "#DDE2FF";
+        ctx.beginPath();
+        ctx.arc(s.x, s.y, s.r, 0, 6.2832);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+      if (!reduce) raf = window.requestAnimationFrame(paint);
+    }
+
+    function start() {
+      if (raf) window.cancelAnimationFrame(raf);
+      build();
+      paint();
+    }
+
+    start();
+
+    var t = null;
+    window.addEventListener("resize", function () {
+      window.clearTimeout(t);
+      t = window.setTimeout(start, 180);
+    }, { passive: true });
+  }
+
+  /* ---------- گرفتن آخرین نسخه از گیت‌هاب ---------- */
+
+  function api(owner, repo) {
+    return "https://api.github.com/repos/" + owner + "/" + repo + "/releases/latest";
+  }
+
+  function fetchLatest(cfg) {
+    // AbortController روی وب‌ویوهای خیلی قدیمی نیست؛ نبودش نباید صفحه را بشکند.
+    var ctrl = null, timer = null;
+    try { ctrl = new AbortController(); } catch (e) { ctrl = null; }
+
+    var opts = { headers: { "Accept": "application/vnd.github+json" } };
+    if (ctrl) {
+      opts.signal = ctrl.signal;
+      timer = window.setTimeout(function () { ctrl.abort(); }, CONFIG.apiTimeoutMs);
+    }
+
+    return fetch(api(cfg.owner, cfg.repo), opts)
+      .then(function (r) {
+        if (timer) window.clearTimeout(timer);
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (j) {
+        if (timer) window.clearTimeout(timer);
+        return j;
+      });
+  }
+
+  function setVersion(elId, tag) {
+    var el = document.getElementById(elId);
+    if (!el) return;
+    var b = el.querySelector("b");
+    if (b) b.textContent = tag;
+    el.classList.remove("loading");
+  }
+
+  // وقتی API در دسترس نیست، شماره‌ی نسخه را حدس نمی‌زنیم — صادقانه
+  // می‌گوییم و لینک «آخرین نسخه» گیت‌هاب که همیشه کار می‌کند سرِ جایش می‌ماند.
+  function setUnknown(elId) {
+    var el = document.getElementById(elId);
+    if (!el) return;
+    // شماره‌ی نسخه را حدس نمی‌زنیم. برچسب را به یک جمله‌ی کامل تبدیل می‌کنیم
+    // («آخرین نسخه: آخرین» بی‌معنی بود) و مقدار را کلاً برمی‌داریم.
+    var b = el.querySelector("b");
+    if (b) b.remove();
+    var lbl = el.querySelector(".lbl");
+    if (lbl) lbl.textContent = "دریافت آخرین نسخه";
+    el.classList.remove("loading");
+    var help = document.getElementById("dl-help");
+    if (help) help.hidden = false;
+  }
+
+  function apkAssets(rel) {
+    var out = [];
+    var list = (rel && rel.assets) || [];
+    for (var i = 0; i < list.length; i++) {
+      var a = list[i];
+      if (a && typeof a.name === "string" && /\.apk$/i.test(a.name)) out.push(a);
+    }
+    return out;
+  }
+
+  /* — CubeVPN — از سرورِ خودمان، نه از گیت‌هاب —
+     دکمه همیشه به cubevpn.php وصل است و لازم نیست جاوااسکریپت آدرسش را عوض
+     کند؛ این قطعه فقط شماره‌ی نسخه و حجم را روی کارت می‌نویسد. اگر هم به هر
+     دلیلی نشد، دکمه سرِ جایش کار می‌کند. */
+  (function () {
+    var ctrl = null, timer = null;
+    try { ctrl = new AbortController(); } catch (e) { ctrl = null; }
+    var opts = {};
+    if (ctrl) {
+      opts.signal = ctrl.signal;
+      timer = window.setTimeout(function () { ctrl.abort(); }, CONFIG.apiTimeoutMs);
+    }
+    fetch(CONFIG.cubevpnInfo, opts)
+      .then(function (r) {
+        if (timer) window.clearTimeout(timer);
+        if (!r.ok) throw new Error("HTTP " + r.status);
+        return r.json();
+      })
+      .then(function (d) {
+        if (timer) window.clearTimeout(timer);
+        if (!d || !d.ok || !d.version) { setUnknown("cube-ver"); return; }
+        setVersion("cube-ver", d.version + (d.size_mb ? " — " + d.size_mb + " مگابایت" : ""));
+      })
+      .catch(function () { setUnknown("cube-ver"); });
+  })();
+
+  /* — v2rayNG — */
+  fetchLatest(CONFIG.v2rayng).then(function (rel) {
+    var tag = rel && rel.tag_name;
+    if (!tag) { setUnknown("ng-ver"); return; }
+    setVersion("ng-ver", tag);
+
+    var apks = apkAssets(rel);
+    if (!apks.length) return;
+
+    function findApk(needle) {
+      for (var i = 0; i < apks.length; i++) {
+        if (apks[i].name.toLowerCase().indexOf(needle) !== -1) return apks[i];
+      }
+      return null;
+    }
+
+    // ترتیب مهم است: arm64 را قبل از arm جست‌وجو می‌کنیم چون
+    // "armeabi" هم شامل رشته‌ی "arm" است.
+    var map = [
+      { needle: "arm64", i: 0 },
+      { needle: "armeabi", i: 1 }
+    ];
+    var links = document.querySelectorAll("#ng-arch a");
+    for (var m = 0; m < map.length; m++) {
+      var found = findApk(map[m].needle);
+      var node = links[map[m].i];
+      if (found && node) {
+        node.setAttribute("href", found.browser_download_url);
+        node.setAttribute("download", "");
+      }
+    }
+  }).catch(function () { setUnknown("ng-ver"); });
+
+  /* ---------- ویندوز: دانلود مستقیم به‌جای بازکردن صفحه‌ی گیت‌هاب ---------- */
+
+  // بعضی پروژه‌ها (مثل happ-desktop) فقط pre-release منتشر می‌کنند و
+  // /releases/latest برایشان 404 می‌دهد. در آن حالت سراغ فهرست ریلیزها
+  // می‌رویم و تازه‌ترین را برمی‌داریم.
+  function latestOrFirst(cfg) {
+    return fetchLatest(cfg).catch(function () {
+      var ctrl = null, timer = null;
+      try { ctrl = new AbortController(); } catch (e) { ctrl = null; }
+      var opts = { headers: { "Accept": "application/vnd.github+json" } };
+      if (ctrl) {
+        opts.signal = ctrl.signal;
+        timer = window.setTimeout(function () { ctrl.abort(); }, CONFIG.apiTimeoutMs);
+      }
+      return fetch("https://api.github.com/repos/" + cfg.owner + "/" + cfg.repo + "/releases?per_page=5", opts)
+        .then(function (r) {
+          if (timer) window.clearTimeout(timer);
+          if (!r.ok) throw new Error("HTTP " + r.status);
+          return r.json();
+        })
+        .then(function (list) {
+          if (!list || !list.length) throw new Error("no releases");
+          return list[0];
+        });
+    });
+  }
+
+  // انتخابِ فایلِ ویندوز از میان دارایی‌های ریلیز.
+  // نام‌گذاری پروژه‌ها یکسان نیست، پس امتیازدهی می‌کنیم و اگر هیچ‌کدام
+  // مطمئن نبود، دست نمی‌زنیم و همان صفحه‌ی ریلیز باز می‌شود.
+  function pickWindowsAsset(rel) {
+    var list = (rel && rel.assets) || [];
+    var best = null, bestScore = 0;
+    for (var i = 0; i < list.length; i++) {
+      var a = list[i];
+      if (!a || typeof a.name !== "string") continue;
+      var n = a.name.toLowerCase();
+      var score = 0;
+
+      if (/\.(exe|msi)$/.test(n)) score += 6;
+      else if (/\.(zip|7z)$/.test(n)) score += 3;
+      else continue;                       // dmg/apk/tar.gz و ... اصلاً ویندوز نیستند
+
+      if (n.indexOf("win") !== -1) score += 4;
+      if (/arm/.test(n)) score -= 5;       // بیشترِ کاربران x64 هستند
+      if (/(x64|64)/.test(n)) score += 2;
+      if (/(setup|installer)/.test(n)) score += 1;
+      if (/(portable|debug|symbol|\.pdb)/.test(n)) score -= 2;
+
+      if (score > bestScore) { bestScore = score; best = a; }
+    }
+    // زیر این آستانه یعنی صرفاً یک zip بی‌نشانه پیدا شده؛ ریسکش را نمی‌کنیم.
+    return bestScore >= 5 ? best : null;
+  }
+
+  CONFIG.winApps.forEach(function (app) {
+    latestOrFirst(app).then(function (rel) {
+      var row = document.getElementById(app.id);
+      var ver = document.getElementById(app.id + "-ver");
+      if (!row) return;
+
+      if (ver && rel && rel.tag_name) ver.textContent = rel.tag_name;
+
+      var asset = pickWindowsAsset(rel);
+      if (asset && asset.browser_download_url) {
+        row.setAttribute("href", asset.browser_download_url);
+        row.setAttribute("download", "");
+        row.removeAttribute("target");     // دانلود مستقیم، بدون بازکردن تبِ جدید
+        // آیکون باید همان کاری را نشان دهد که واقعاً اتفاق می‌افتد: این ردیف
+        // دیگر صفحه‌ی گیت‌هاب را باز نمی‌کند، فایل را دانلود می‌کند.
+        var glyph = row.querySelector("svg path");
+        if (glyph) glyph.setAttribute("d", "M12 3v11m0 0 4-4m-4 4-4-4M5 19h14");
+      }
+    }).catch(function () {
+      // شبکه یا API در دسترس نیست — لینکِ صفحه‌ی ریلیز که در HTML هست کافیست
+      var help = document.getElementById("dl-help");
+      if (help) help.hidden = false;
+    });
+  });
+
+})();
+</script>
+</body>
+</html>

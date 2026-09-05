@@ -66,7 +66,11 @@ function rx_cache_dir(): string
     if (!is_dir(RX_CACHE_DIR)) {
         @mkdir(RX_CACHE_DIR, 0775, true);
         // پوشه‌ی کش نباید از وب خوانده شود.
-        @file_put_contents(RX_CACHE_DIR . '/.htaccess', "Require all denied\nDeny from all\n");
+        // هر نحو داخل IfModule خودش: «Deny from all» روی آپاچی ۲.۴ بدون
+        // mod_access_compat ناشناخته است و پوشه را ۵۰۰ می‌کند.
+        @file_put_contents(RX_CACHE_DIR . '/.htaccess',
+              "<IfModule mod_authz_core.c>\n    Require all denied\n</IfModule>\n"
+            . "<IfModule !mod_authz_core.c>\n    Order allow,deny\n    Deny from all\n</IfModule>\n");
         @file_put_contents(RX_CACHE_DIR . '/index.html', '');
     }
     return RX_CACHE_DIR;

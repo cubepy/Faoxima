@@ -1,5 +1,14 @@
 # فایلِ توکن هرگز نباید از وب خوانده شود.
+#
+# هر دو نحو را می‌گذاریم ولی هر کدام داخل IfModule خودش: روی آپاچی ۲.۴ که
+# mod_access_compat ندارد، «Deny from all» یک دستورِ ناشناخته است و کلِ پوشه
+# را با خطای ۵۰۰ از کار می‌اندازد.
 <FilesMatch "^cubevpn_config\.php$">
-    Require all denied
-    Deny from all
+    <IfModule mod_authz_core.c>
+        Require all denied
+    </IfModule>
+    <IfModule !mod_authz_core.c>
+        Order allow,deny
+        Deny from all
+    </IfModule>
 </FilesMatch>
