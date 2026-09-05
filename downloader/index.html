@@ -687,6 +687,18 @@ a:focus-visible,button:focus-visible{
         دانلود CubeVPN
       </a>
 
+      <p class="arch-label" id="cube-arch-label" hidden>اگر اینترنتتان کند است، نسخه‌ی سبک‌ترِ مناسب گوشی‌تان:</p>
+      <div class="arch" id="cube-arch" hidden>
+        <a href="cubevpn.php?abi=arm64" rel="noopener">
+          <span class="n" dir="ltr">arm64-v8a</span>
+          <span class="d">تقریباً همه‌ی گوشی‌ها<b data-size></b></span>
+        </a>
+        <a href="cubevpn.php?abi=arm" rel="noopener">
+          <span class="n" dir="ltr">armeabi-v7a</span>
+          <span class="d">گوشی‌های قدیمی<b data-size></b></span>
+        </a>
+      </div>
+
       <p class="note">نسخه‌ی رسمی و امضاشده‌ی ما. اگر قبلاً نصبش کرده‌اید، همین فایل را روی نسخه‌ی قبلی نصب کنید — اطلاعاتتان پاک نمی‌شود.</p>
     </article>
 
@@ -996,6 +1008,32 @@ a:focus-visible,button:focus-visible{
         if (timer) window.clearTimeout(timer);
         if (!d || !d.ok || !d.version) { setUnknown("cube-ver"); return; }
         setVersion("cube-ver", d.version + (d.size_mb ? " — " + d.size_mb + " مگابایت" : ""));
+
+        // دکمه‌های معماری فقط وقتی نشان داده می‌شوند که واقعاً همان فایل
+        // منتشر شده باشد — لینکِ مرده بدتر از نبودنِ دکمه است.
+        var v = d.variants || {};
+        var row = document.getElementById("cube-arch");
+        var lbl = document.getElementById("cube-arch-label");
+        if (!row) return;
+        var map = { "arm64": 0, "arm": 1 };
+        var links = row.querySelectorAll("a");
+        var shown = 0;
+        for (var key in map) {
+          if (!Object.prototype.hasOwnProperty.call(map, key)) continue;
+          var node = links[map[key]];
+          if (!node) continue;
+          if (v[key]) {
+            var b = node.querySelector("[data-size]");
+            if (b && v[key].size_mb) b.textContent = " — " + v[key].size_mb + " مگابایت";
+            shown++;
+          } else {
+            node.hidden = true;
+          }
+        }
+        if (shown > 0) {
+          row.hidden = false;
+          if (lbl) lbl.hidden = false;
+        }
       })
       .catch(function () { setUnknown("cube-ver"); });
   })();
