@@ -1,0 +1,5 @@
+# فایلِ توکن هرگز نباید از وب خوانده شود.
+<FilesMatch "^cubevpn_config\.php$">
+    Require all denied
+    Deny from all
+</FilesMatch>
