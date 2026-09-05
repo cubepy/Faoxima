@@ -32,7 +32,7 @@ define('RX_CACHE_MAX_DAYS', 30);
 define('RX_HTTP_TIMEOUT',   25);
 
 // ---------------------------------------------------------------- بوت
-@ini_set('memory_limit', '256M');
+@ini_set('memory_limit', '256M');   // فایل استریم می‌شود، پس این سقف تعیین‌کننده نیست
 @set_time_limit(0);
 
 // هیچ خطایی نباید به صفحه‌ی سفیدِ ۵۰۰ ختم شود: پیام قابل‌فهم می‌دهیم و
@@ -137,6 +137,44 @@ function rx_gh($url, $token, $accept, $follow)
         'body'    => substr($raw, $hlen),
         'error'   => $err,
     );
+}
+
+/**
+ * فایل را مستقیم روی دیسک می‌نویسد، نه در حافظه.
+ *
+ * نسخه‌ی قبلی از rx_gh استفاده می‌کرد که با CURLOPT_RETURNTRANSFER کلِ بدنه را
+ * در یک رشته می‌ریخت و بعد substr یک کپیِ دوم می‌ساخت. برای فایلِ ۶۰ مگابایتی
+ * جواب می‌داد، برای universalِ ۱۸۹ مگابایتی حدود ۳۸۰ مگابایت حافظه لازم داشت و
+ * به سقفِ حافظه می‌خورد — یعنی همان «خطای داخلی سرور» که فقط روی آن یک فایل
+ * دیده می‌شد. با CURLOPT_FILE حافظه ثابت می‌ماند، هر چقدر فایل بزرگ باشد.
+ *
+ * مهلتِ کلی هم برداشته شده (۲۵ ثانیه برای ۱۸۹ مگابایت کافی نبود) و به‌جایش
+ * فقط وقتی قطع می‌کنیم که سرعت واقعاً بخوابد: کمتر از ۱ کیلوبایت در ثانیه
+ * به مدت ۶۰ ثانیه.
+ */
+function rx_download_to_file($url, $path)
+{
+    if (!function_exists('curl_init')) {
+        return array('ok' => false, 'code' => 0, 'error' => 'افزونه‌ی cURL روی این هاست فعال نیست');
+    }
+    $fp = @fopen($path, 'wb');
+    if ($fp === false) {
+        return array('ok' => false, 'code' => 0, 'error' => 'فایل موقت ساخته نشد: ' . $path);
+    }
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, array('Accept: application/octet-stream', 'User-Agent: CubeVPN-Downloader'));
+    curl_setopt($ch, CURLOPT_FILE, $fp);            // مستقیم روی دیسک
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 15);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 0);           // بدون سقفِ کلی
+    curl_setopt($ch, CURLOPT_LOW_SPEED_LIMIT, 1024);
+    curl_setopt($ch, CURLOPT_LOW_SPEED_TIME, 60);
+    $okExec = curl_exec($ch);
+    $err    = curl_errno($ch) ? curl_error($ch) : '';
+    $code   = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    fclose($fp);
+    return array('ok' => ($okExec !== false && $code === 200), 'code' => $code, 'error' => $err);
 }
 
 function rx_header_value($rawHeaders, $name)
@@ -280,21 +318,41 @@ function rx_ensure_file($variant, $token)
     // گیت‌هاب به یک آدرسِ امضاشده ریدایرکت می‌کند. آن آدرس خودش امضا دارد و
     // اگر هدرِ Authorization را هم برایش بفرستیم ردش می‌کند، پس ریدایرکت را
     // دستی و بدون توکن دنبال می‌کنیم.
+    // این درخواست فقط برای گرفتنِ آدرسِ امضاشده است؛ بدنه‌اش کوچک است.
     $r = rx_gh($url, $token, 'application/octet-stream', false);
+    $loc = '';
     if ($r['code'] >= 300 && $r['code'] < 400) {
         $loc = rx_header_value($r['headers'], 'location');
         if ($loc === '') rx_fail(502, 'دریافت فایل از گیت‌هاب ناموفق بود.', 'redirect without Location');
-        $r = rx_gh($loc, '', 'application/octet-stream', true);
-    }
-    if ($r['code'] !== 200 || $r['body'] === '') {
+    } elseif ($r['code'] !== 200) {
         rx_fail(502, 'دریافت فایل از گیت‌هاب ناموفق بود.',
-            'asset download HTTP ' . $r['code'] . ' ' . $r['error']);
+            'asset redirect HTTP ' . $r['code'] . ' ' . $r['error']);
     }
+
     $tmp = $path . '.' . substr(md5(uniqid('', true)), 0, 8) . '.part';
-    if (@file_put_contents($tmp, $r['body']) === false) {
-        rx_fail(500, 'ذخیره‌ی فایل روی سرور ممکن نشد.',
-            'cannot write ' . $tmp . ' — پوشه باید قابل نوشتن باشد');
+    if ($loc !== '') {
+        // آدرسِ امضاشده خودش اعتبارسنجی دارد و اگر هدرِ Authorization را هم
+        // برایش بفرستیم ردش می‌کند، پس بدون توکن و مستقیم روی دیسک.
+        $d = rx_download_to_file($loc, $tmp);
+    } else {
+        $d = array('ok' => false, 'code' => $r['code'], 'error' => 'پاسخِ غیرمنتظره از گیت‌هاب');
     }
+    if (empty($d['ok'])) {
+        @unlink($tmp);
+        rx_fail(502, 'دریافت فایل از گیت‌هاب ناموفق بود.',
+            'asset download HTTP ' . $d['code'] . ' ' . $d['error']);
+    }
+
+    // اندازه را تایید می‌کنیم: دانلودِ بریده (قطعی شبکه یا پرشدنِ فضای هاست)
+    // نباید به‌عنوان فایلِ سالم کش شود.
+    $got = @filesize($tmp);
+    if ($variant['size'] > 0 && $got !== false && $got !== $variant['size']) {
+        @unlink($tmp);
+        rx_fail(502, 'فایل ناقص دریافت شد.',
+            'size mismatch: got ' . $got . ' expected ' . $variant['size']
+            . ' — احتمالاً فضای دیسک هاست پر است یا اتصال قطع شده');
+    }
+
     @rename($tmp, $path);          // اتمیک: دانلودِ نیمه‌کاره هیچ‌وقت سرو نمی‌شود
     rx_prune_cache();
     return $path;
