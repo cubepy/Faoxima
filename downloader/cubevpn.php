@@ -16,7 +16,8 @@
  *   cubevpn.php?abi=arm64       فقط arm64-v8a
  *   cubevpn.php?abi=arm         فقط armeabi-v7a
  *   cubevpn.php?info=1          JSON: نسخه، حجم و فهرست معماری‌ها
- *   cubevpn.php?diag=1&token=…  عیب‌یابی (اگر صفحه خطای ۵۰۰ داد)
+ *   cubevpn.php?info=1&refresh=1  نادیده‌گرفتنِ کش، خواندنِ دوباره از گیت‌هاب
+ *   cubevpn.php?diag=1          عیب‌یابی: فهرست ریلیزها و دلیلِ انتخاب
  *
  * سازگاری: عمداً از هیچ قابلیتِ نسخه‌ی جدیدِ PHP استفاده نشده (نه type hint،
  * نه declare(strict_types)، نه [] برای باز کردنِ آرایه) تا روی هاست‌هایی که
@@ -237,14 +238,49 @@ function rx_pick_asset($assets, $wantAbi = '')
 }
 
 /** آخرین ریلیزِ منتشرشده؛ اگر «latest» نبود، تازه‌ترین غیرِ پیش‌نویس. */
-function rx_latest_release($token)
+/** آیا این ریلیز حداقل یک فایل apk دارد؟ */
+function rx_release_has_apk($rel)
+{
+    if (!isset($rel['assets']) || !is_array($rel['assets'])) return false;
+    foreach ($rel['assets'] as $a) {
+        if (!isset($a['name'])) continue;
+        if (substr(strtolower($a['name']), -4) === '.apk') return true;
+    }
+    return false;
+}
+
+/** زمانِ ریلیز برای مرتب‌سازی. */
+function rx_release_time($rel)
+{
+    foreach (array('published_at', 'created_at') as $k) {
+        if (!empty($rel[$k])) {
+            $t = strtotime($rel[$k]);
+            if ($t) return $t;
+        }
+    }
+    return 0;
+}
+
+/**
+ * تازه‌ترین ریلیزی که واقعاً فایل نصب دارد.
+ *
+ * [FIX نسخه‌ی گیرکرده] قبلاً اول /releases/latest پرسیده می‌شد و اگر جواب
+ * می‌داد همان‌جا برمی‌گشت. ولی گیت‌هاب در آن مسیر **پیش‌انتشار (pre-release)
+ * و پیش‌نویس را نادیده می‌گیرد**؛ پس وقتی نسخه‌ی تازه به‌صورت pre-release
+ * منتشر می‌شد، صفحه تا ابد روی نسخه‌ی قدیمیِ «Latest» می‌ماند. همان چیزی که
+ * v1.7.7 را به‌جای v1.7.14 نشان می‌داد.
+ *
+ * حالا کلِ فهرست خوانده می‌شود و تازه‌ترین ریلیزِ منتشرشده‌ای که فایل apk
+ * دارد انتخاب می‌گردد — چه Latest باشد چه pre-release. ریلیزی که هنوز فایلی
+ * به آن پیوست نشده رد می‌شود، وگرنه دکمه به نسخه‌ای بدون دانلود وصل می‌شد.
+ *
+ * $debug اگر آرایه باشد، شرحِ تصمیم داخلش نوشته می‌شود (برای ?diag=1).
+ */
+function rx_latest_release($token, &$debug = null)
 {
     $base = 'https://api.github.com/repos/' . RX_OWNER . '/' . RX_REPO;
-    $r = rx_gh($base . '/releases/latest', $token, 'application/vnd.github+json', false);
-    if ($r['code'] === 200) {
-        $j = json_decode($r['body'], true);
-        if (is_array($j) && !empty($j['assets'])) return $j;
-    }
+
+    $r = rx_gh($base . '/releases?per_page=30', $token, 'application/vnd.github+json', false);
     if ($r['code'] === 401 || $r['code'] === 403) {
         rx_fail(500, 'دسترسی به مخزن برقرار نشد.',
             'auth failed — HTTP ' . $r['code'] . ' ' . substr($r['body'], 0, 200));
@@ -252,16 +288,38 @@ function rx_latest_release($token)
     if ($r['code'] === 0) {
         rx_fail(502, 'ارتباط با گیت‌هاب برقرار نشد.', 'network: ' . $r['error']);
     }
-    $r = rx_gh($base . '/releases?per_page=20', $token, 'application/vnd.github+json', false);
-    if ($r['code'] !== 200) {
-        rx_fail(502, 'ارتباط با گیت‌هاب برقرار نشد.',
-            'list releases HTTP ' . $r['code'] . ' ' . $r['error'] . ' ' . substr($r['body'], 0, 200));
+
+    $best = null;
+    if ($r['code'] === 200) {
+        $list = json_decode($r['body'], true);
+        if (is_array($list)) {
+            foreach ($list as $rel) {
+                if (!is_array($rel)) continue;
+                $skip = '';
+                if (!empty($rel['draft']))            $skip = 'پیش‌نویس';
+                elseif (!rx_release_has_apk($rel))    $skip = 'بدون فایل apk';
+                if (is_array($debug)) {
+                    $debug[] = array(
+                        'tag'        => isset($rel['tag_name']) ? $rel['tag_name'] : '?',
+                        'prerelease' => !empty($rel['prerelease']),
+                        'draft'      => !empty($rel['draft']),
+                        'assets'     => isset($rel['assets']) ? count($rel['assets']) : 0,
+                        'time'       => rx_release_time($rel),
+                        'skip'       => $skip,
+                    );
+                }
+                if ($skip !== '') continue;
+                if ($best === null || rx_release_time($rel) > rx_release_time($best)) $best = $rel;
+            }
+        }
     }
-    $list = json_decode($r['body'], true);
-    if (!is_array($list)) return null;
-    foreach ($list as $rel) {
-        if (!empty($rel['draft'])) continue;
-        if (!empty($rel['assets'])) return $rel;
+    if ($best !== null) return $best;
+
+    // اگر فهرست به هر دلیلی نیامد، سراغ مسیرِ latest می‌رویم.
+    $r = rx_gh($base . '/releases/latest', $token, 'application/vnd.github+json', false);
+    if ($r['code'] === 200) {
+        $j = json_decode($r['body'], true);
+        if (is_array($j) && rx_release_has_apk($j)) return $j;
     }
     return null;
 }
@@ -269,7 +327,11 @@ function rx_latest_release($token)
 function rx_meta($token)
 {
     $file = rx_cache_dir() . '/meta.json';
-    if (is_file($file) && (time() - (int) filemtime($file)) < RX_META_TTL) {
+    // ?refresh=1 کش را دور می‌زند — برای وقتی که نسخه‌ی تازه منتشر کرده‌اید و
+    // نمی‌خواهید تا پایانِ TTL صبر کنید.
+    $force = (isset($_GET['refresh']) && $_GET['refresh'] === '1');
+    if ($force) @unlink($file);
+    if (!$force && is_file($file) && (time() - (int) filemtime($file)) < RX_META_TTL) {
         $j = json_decode(file_get_contents($file), true);
         if (is_array($j) && !empty($j['variants'])) return $j;
     }
@@ -407,29 +469,41 @@ if (isset($_GET['diag']) && $_GET['diag'] === '1') {
     $d = @rx_cache_dir();
     echo "پوشه‌ی کش         : " . (is_dir($d) ? $d : '❌ ساخته نشد') . "\n";
     echo "قابل نوشتن        : " . (is_dir($d) && is_writable($d) ? 'بله' : '❌ خیر — دسترسی ۷۵۵ یا ۷۷۵ بدهید') . "\n";
+    $mf = rx_cache_dir() . '/meta.json';
+    echo "کشِ نسخه          : " . (is_file($mf)
+        ? (time() - filemtime($mf)) . ' ثانیه پیش ساخته شده (TTL ' . RX_META_TTL . ')'
+        : 'هنوز ساخته نشده') . "\n";
+
     if ($RX_TOKEN !== '' && function_exists('curl_init')) {
-        $r = rx_gh('https://api.github.com/repos/' . RX_OWNER . '/' . RX_REPO . '/releases/latest',
-                   $RX_TOKEN, 'application/vnd.github+json', false);
-        echo "پاسخ گیت‌هاب      : HTTP " . $r['code'] . ($r['error'] !== '' ? ' — ' . $r['error'] : '') . "\n";
-        if ($r['code'] === 200) {
-            $j = json_decode($r['body'], true);
-            echo "نسخه              : " . (isset($j['tag_name']) ? $j['tag_name'] : '?') . "\n";
-            echo "فایل‌های ریلیز    :\n";
-            if (!empty($j['assets'])) {
-                foreach ($j['assets'] as $a) {
-                    printf("   %-46s %6.1f MB   [%s]\n",
-                        $a['name'], $a['size'] / 1048576, rx_abi_of($a['name']));
-                }
-                $p = rx_pick_asset($j['assets'], '');
-                echo "انتخابِ دکمه       : " . ($p ? $p['name'] : '❌ هیچ فایل apk نیست') . "\n";
-            } else {
-                echo "   ❌ هیچ فایلی به ریلیز پیوست نشده\n";
+        echo "\nریلیزهای مخزن (تازه‌ترین اول):\n";
+        $dbg = array();
+        $rel = rx_latest_release($RX_TOKEN, $dbg);
+        if (empty($dbg)) {
+            echo "   (فهرست خالی برگشت)\n";
+        } else {
+            foreach ($dbg as $d) {
+                $flags = array();
+                if ($d['draft'])      $flags[] = 'draft';
+                if ($d['prerelease']) $flags[] = 'pre-release';
+                printf("   %-14s %-14s فایل‌ها: %-3d %s\n",
+                    $d['tag'],
+                    $flags ? implode('+', $flags) : 'انتشار عادی',
+                    $d['assets'],
+                    $d['skip'] !== '' ? '← رد شد: ' . $d['skip'] : '');
             }
-        } elseif ($r['code'] === 401 || $r['code'] === 403) {
-            echo "→ توکن نامعتبر است یا به این مخزن دسترسی ندارد.\n";
-        } elseif ($r['code'] === 404) {
-            echo "→ مخزن یا ریلیز پیدا نشد (نام مخزن را چک کنید).\n";
         }
+        echo "\nانتخاب شد         : " . ($rel && isset($rel['tag_name']) ? $rel['tag_name'] : '❌ هیچ‌کدام') . "\n";
+        if ($rel && !empty($rel['assets'])) {
+            echo "فایل‌های آن نسخه  :\n";
+            foreach ($rel['assets'] as $a) {
+                printf("   %-46s %6.1f MB   [%s]\n",
+                    $a['name'], $a['size'] / 1048576, rx_abi_of($a['name']));
+            }
+            $p = rx_pick_asset($rel['assets'], '');
+            echo "دکمه‌ی اصلی       : " . ($p ? $p['name'] : '❌ هیچ فایل apk نیست') . "\n";
+        }
+        echo "\nاگر نسخه‌ی روی صفحه قدیمی است، یک بار این را باز کنید:\n";
+        echo "    cubevpn.php?info=1&refresh=1\n";
     }
     exit;
 }
