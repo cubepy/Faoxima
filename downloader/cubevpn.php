@@ -457,6 +457,10 @@ function rx_meta_from_feed($feedUrl)
         $meta['variants'][$k]['name'] = rx_name_from_url($v['url']);
     }
     @file_put_contents($file, json_encode($meta));
+    // در حالتِ فید هیچ فایلی روی هاست ذخیره نمی‌شود، پس هر چه از دورانِ
+    // پراکسی مانده باید برود. اینجا انجام می‌شود نه در هر درخواست: فقط وقتی
+    // فید واقعاً دوباره خوانده شده.
+    rx_purge_proxy_cache();
     return $meta;
 }
 
@@ -556,6 +560,46 @@ function rx_ensure_file($variant, $token)
     return $path;
 }
 
+/**
+ * فایل‌های APKیی که از مسیرِ گیت‌هاب کش شده بودند را پاک می‌کند.
+ *
+ * وقتی از فید می‌خوانیم، دانلود ریدایرکت می‌شود و هیچ فایلی روی هاست ذخیره
+ * نمی‌شود — پس هر چه از قبل در کش مانده، مرده است. rx_prune_cache() هم فقط از
+ * داخل rx_ensure_file() صدا زده می‌شد که دیگر اجرا نمی‌شود، یعنی آن فایل‌ها
+ * برای همیشه جا می‌ماندند: صد و پنجاه مگابایت از فضای هاست برای چیزی که هیچ
+ * خواننده‌ای ندارد.
+ *
+ * برمی‌گرداند: تعداد بایتی که آزاد شد.
+ */
+function rx_purge_proxy_cache()
+{
+    $freed = 0;
+    foreach (array('/asset-*.apk', '/*.part') as $pattern) {
+        $files = glob(rx_cache_dir() . $pattern);
+        if (!is_array($files)) continue;
+        foreach ($files as $f) {
+            if (!is_file($f)) continue;
+            $sz = (int) @filesize($f);
+            if (@unlink($f)) $freed += $sz;
+        }
+    }
+    if ($freed > 0) {
+        @error_log('[cubevpn] پاک‌سازی کشِ قدیمیِ پراکسی: ' . round($freed / 1048576, 1) . ' مگابایت آزاد شد');
+    }
+    return $freed;
+}
+
+/** مجموع حجمِ پوشه‌ی کش، برای گزارشِ عیب‌یابی. */
+function rx_cache_bytes()
+{
+    $total = 0;
+    $files = glob(rx_cache_dir() . '/*');
+    if (is_array($files)) {
+        foreach ($files as $f) if (is_file($f)) $total += (int) @filesize($f);
+    }
+    return $total;
+}
+
 function rx_prune_cache()
 {
     $cut = time() - (RX_CACHE_MAX_DAYS * 86400);
@@ -627,6 +671,9 @@ if (isset($_GET['diag']) && $_GET['diag'] === '1') {
         }
         echo "\n(وقتی فید تنظیم باشد، ریلیزهای گیت‌هاب اصلاً خوانده نمی‌شوند.)\n";
     }
+    $cb = rx_cache_bytes();
+    echo "حجم پوشه‌ی کش     : " . ($cb > 1048576 ? round($cb / 1048576, 1) . ' مگابایت' : $cb . ' بایت')
+        . ($cb > 20 * 1048576 ? '  ← فایل‌های قدیمیِ پراکسی؛ با یک بار refresh=1 پاک می‌شوند' : '') . "\n";
     $mf = rx_cache_dir() . '/meta.json';
     echo "کشِ نسخه          : " . (is_file($mf)
         ? (time() - filemtime($mf)) . ' ثانیه پیش ساخته شده (TTL ' . RX_META_TTL . ')'
