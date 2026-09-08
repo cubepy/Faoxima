@@ -385,6 +385,24 @@ function rx_remote_size($url)
     return $len > 0 ? $len : null;
 }
 
+/**
+ * نام فایل از روی آدرس.
+ *
+ * وقتی دروازه‌ی لایسنس فعال باشد، آدرسِ فید به یک اسکریپت اشاره می‌کند و نام
+ * واقعیِ فایل در پارامترِ f= است — گرفتنِ basename از مسیر «platform_appdownload.php»
+ * می‌داد، که نه نام فایل است و نه به درد کسی می‌خورد.
+ */
+function rx_name_from_url($url)
+{
+    $q = parse_url($url, PHP_URL_QUERY);
+    if ($q) {
+        parse_str($q, $qs);
+        if (!empty($qs['f'])) return basename($qs['f']);
+    }
+    $base = basename(parse_url($url, PHP_URL_PATH));
+    return $base !== '' ? $base : 'CubeVPN.apk';
+}
+
 /** فید را به همان ساختاری که بقیه‌ی فایل انتظار دارد تبدیل می‌کند. */
 function rx_meta_from_feed($feedUrl)
 {
@@ -423,9 +441,9 @@ function rx_meta_from_feed($feedUrl)
         'variants' => $variants,
         'published_at' => '',
     );
-    $meta['default']['name'] = basename(parse_url($f['url'], PHP_URL_PATH));
+    $meta['default']['name'] = rx_name_from_url($f['url']);
     foreach ($meta['variants'] as $k => $v) {
-        $meta['variants'][$k]['name'] = basename(parse_url($v['url'], PHP_URL_PATH));
+        $meta['variants'][$k]['name'] = rx_name_from_url($v['url']);
     }
     @file_put_contents($file, json_encode($meta));
     return $meta;
@@ -572,7 +590,11 @@ if (isset($_GET['diag']) && $_GET['diag'] === '1') {
     echo "cURL              : " . (function_exists('curl_init') ? 'فعال' : '❌ غیرفعال — بدون این کار نمی‌کند') . "\n";
     echo "allow_url_fopen   : " . (ini_get('allow_url_fopen') ? 'روشن' : 'خاموش (مهم نیست)') . "\n";
     echo "فایل تنظیمات      : " . (is_file($rx_cfg_file) ? 'هست' : '❌ نیست — cubevpn_config.php را بسازید') . "\n";
-    echo "توکن              : " . ($RX_TOKEN !== '' ? 'تنظیم شده (' . strlen($RX_TOKEN) . ' کاراکتر)' : '❌ خالی') . "\n";
+    // وقتی فید تنظیم است، گیت‌هاب اصلاً صدا زده نمی‌شود و توکن لازم نیست —
+    // پس نبودنش را خطا نشان نمی‌دهیم.
+    echo "توکن گیت‌هاب      : " . ($RX_TOKEN !== ''
+        ? 'تنظیم شده (' . strlen($RX_TOKEN) . ' کاراکتر)'
+        : ($RX_FEED !== '' ? 'خالی — لازم هم نیست، چون از فید خوانده می‌شود' : '❌ خالی')) . "\n";
     $d = @rx_cache_dir();
     echo "پوشه‌ی کش         : " . (is_dir($d) ? $d : '❌ ساخته نشد') . "\n";
     echo "قابل نوشتن        : " . (is_dir($d) && is_writable($d) ? 'بله' : '❌ خیر — دسترسی ۷۵۵ یا ۷۷۵ بدهید') . "\n";
