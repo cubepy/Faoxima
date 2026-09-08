@@ -32,6 +32,15 @@ define('RX_CACHE_DIR',      dirname(__FILE__) . '/.cubevpn-cache');
 define('RX_CACHE_MAX_DAYS', 30);
 define('RX_HTTP_TIMEOUT',   25);
 
+// آدرسِ فیدِ به‌روزرسانی — همان چیزی که publish.sh روی سرورِ بیلد بعد از هر
+// انتشار بازنویسی می‌کند و خودِ اپلیکیشن هم از آن آپدیت می‌گیرد.
+//
+// اینجا به‌عنوان پیش‌فرض نوشته شده و نه فقط در فایل تنظیمات، چون یک بار
+// جاافتادنِ همین یک خط یعنی صفحه بی‌صدا برمی‌گردد سراغ ریلیزهای گیت‌هاب —
+// جایی که ورک‌فلو عمداً هیچ APKیی نمی‌گذارد و نسخه تا ابد روی v1.7.7 می‌ماند.
+// اگر روزی دامنه عوض شد، update_url در cubevpn_config.php این را override می‌کند.
+define('RX_DEFAULT_FEED', 'https://panel.cubemess.eu.cc/downloads/CubeVPN/update.json');
+
 // ---------------------------------------------------------------- بوت
 @ini_set('memory_limit', '256M');   // فایل استریم می‌شود، پس این سقف تعیین‌کننده نیست
 @set_time_limit(0);
@@ -66,6 +75,8 @@ if ($RX_TOKEN === '') {
     $rx_env = getenv('CUBEVPN_GITHUB_TOKEN');
     if ($rx_env) $RX_TOKEN = trim($rx_env);
 }
+// فایل تنظیمات چیزی نگفت؟ پیش‌فرض را بردار.
+if ($RX_FEED === '') $RX_FEED = RX_DEFAULT_FEED;
 
 // ---------------------------------------------------------------- ابزار
 function rx_is_json_mode()
@@ -598,7 +609,11 @@ if (isset($_GET['diag']) && $_GET['diag'] === '1') {
     $d = @rx_cache_dir();
     echo "پوشه‌ی کش         : " . (is_dir($d) ? $d : '❌ ساخته نشد') . "\n";
     echo "قابل نوشتن        : " . (is_dir($d) && is_writable($d) ? 'بله' : '❌ خیر — دسترسی ۷۵۵ یا ۷۷۵ بدهید') . "\n";
-    echo "منبع نسخه         : " . ($RX_FEED !== '' ? 'فیدِ پنل — ' . $RX_FEED : 'ریلیزهای گیت‌هاب') . "\n";
+    $rx_feed_src = 'پیش‌فرضِ داخل cubevpn.php';
+    if (isset($rx_c) && is_array($rx_c) && !empty($rx_c['update_url'])) $rx_feed_src = 'cubevpn_config.php';
+    echo "منبع نسخه         : " . ($RX_FEED !== ''
+        ? 'فیدِ پنل (' . $rx_feed_src . ")\n                    " . $RX_FEED
+        : 'ریلیزهای گیت‌هاب') . "\n";
     if ($RX_FEED !== '') {
         $f = rx_feed_fetch($RX_FEED);
         if ($f === null)            echo "                    ❌ cURL در دسترس نیست\n";
