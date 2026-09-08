@@ -55,10 +55,12 @@ register_shutdown_function('rx_shutdown_guard');
 
 // ---------------------------------------------------------------- توکن
 $RX_TOKEN = '';
+$RX_FEED  = '';
 $rx_cfg_file = dirname(__FILE__) . '/cubevpn_config.php';
 if (is_file($rx_cfg_file)) {
     $rx_c = include $rx_cfg_file;
-    if (is_array($rx_c) && isset($rx_c['token'])) $RX_TOKEN = trim($rx_c['token']);
+    if (is_array($rx_c) && isset($rx_c['token']))      $RX_TOKEN = trim($rx_c['token']);
+    if (is_array($rx_c) && isset($rx_c['update_url'])) $RX_FEED  = trim($rx_c['update_url']);
 }
 if ($RX_TOKEN === '') {
     $rx_env = getenv('CUBEVPN_GITHUB_TOKEN');
@@ -324,6 +326,111 @@ function rx_latest_release($token, &$debug = null)
     return null;
 }
 
+/**
+ * فیدِ به‌روزرسانیِ پنل — همان چیزی که خودِ اپلیکیشن از آن آپدیت می‌گیرد.
+ *
+ * [FIX نسخه‌ی گیرکرده روی v1.7.7] ورک‌فلوی بیلد **عمداً** فایلی به ریلیزِ
+ * گیت‌هاب پیوست نمی‌کند — توضیحِ خودش: «Notes, no files… this repository is
+ * private, so an asset attached here is unreachable by the people who install
+ * the app, and the panel is already serving them.» APKها با publish.sh روی
+ * پنل می‌روند و در update.json اعلام می‌شوند.
+ *
+ * پس گیت‌هاب اصلاً منبعِ درستی نبود: تنها ریلیزی که فایل دارد v1.7.7 است،
+ * چون آن یکی را دستی آپلود کرده بودید. با خواندنِ همین فید، صفحه دقیقاً همان
+ * نسخه‌ای را نشان می‌دهد که به گوشی‌ها می‌رسد، و فایل هم از سروری می‌آید که
+ * کاربرِ بدون VPN می‌تواند بازش کند.
+ *
+ * شکل فید:
+ *   {"version":"1.7.14",
+ *    "url":"…/CubeVPN-v1.7.14-universal-release.apk",
+ *    "abis":{"arm64-v8a":"…","armeabi-v7a":"…"}}
+ */
+function rx_feed_fetch($feedUrl)
+{
+    if (!function_exists('curl_init')) return null;
+    $ch = curl_init($feedUrl);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 8);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+    curl_setopt($ch, CURLOPT_HTTPHEADER, array('Accept: application/json', 'User-Agent: CubeVPN-Downloader'));
+    $body = curl_exec($ch);
+    $code = (int) curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    $err  = curl_errno($ch) ? curl_error($ch) : '';
+    curl_close($ch);
+    if ($body === false || $code !== 200) {
+        return array('error' => 'HTTP ' . $code . ($err !== '' ? ' — ' . $err : ''));
+    }
+    $j = json_decode($body, true);
+    if (!is_array($j) || empty($j['version']) || empty($j['url'])) {
+        return array('error' => 'پاسخ update.json قابل خواندن نبود');
+    }
+    return $j;
+}
+
+/** حجم یک فایل بدون دانلودش (درخواست HEAD). null یعنی معلوم نشد. */
+function rx_remote_size($url)
+{
+    if (!function_exists('curl_init')) return null;
+    $ch = curl_init($url);
+    curl_setopt($ch, CURLOPT_NOBODY, true);
+    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
+    curl_setopt($ch, CURLOPT_FOLLOWLOCATION, true);
+    curl_setopt($ch, CURLOPT_CONNECTTIMEOUT, 8);
+    curl_setopt($ch, CURLOPT_TIMEOUT, 15);
+    curl_exec($ch);
+    $len = curl_getinfo($ch, CURLINFO_CONTENT_LENGTH_DOWNLOAD);
+    curl_close($ch);
+    $len = (int) $len;
+    return $len > 0 ? $len : null;
+}
+
+/** فید را به همان ساختاری که بقیه‌ی فایل انتظار دارد تبدیل می‌کند. */
+function rx_meta_from_feed($feedUrl)
+{
+    $file = rx_cache_dir() . '/meta.json';
+    $force = (isset($_GET['refresh']) && $_GET['refresh'] === '1');
+    if ($force) @unlink($file);
+    if (!$force && is_file($file) && (time() - (int) filemtime($file)) < RX_META_TTL) {
+        $j = json_decode(file_get_contents($file), true);
+        if (is_array($j) && !empty($j['source']) && $j['source'] === 'feed') return $j;
+    }
+
+    $f = rx_feed_fetch($feedUrl);
+    if ($f === null || isset($f['error'])) {
+        rx_fail(502, 'دریافت اطلاعات نسخه ممکن نشد.',
+            'feed ' . $feedUrl . ' : ' . ($f === null ? 'cURL نیست' : $f['error']));
+    }
+
+    $ver = $f['version'];
+    if (substr($ver, 0, 1) !== 'v') $ver = 'v' . $ver;
+    $abis = (isset($f['abis']) && is_array($f['abis'])) ? $f['abis'] : array();
+
+    $variants = array();
+    $variants['universal'] = array('url' => $f['url'], 'size' => rx_remote_size($f['url']));
+    // نام‌های فید با نام‌های داخلیِ ما فرق دارد.
+    $map = array('arm64' => 'arm64-v8a', 'arm' => 'armeabi-v7a');
+    foreach ($map as $key => $feedKey) {
+        if (!empty($abis[$feedKey])) {
+            $variants[$key] = array('url' => $abis[$feedKey], 'size' => rx_remote_size($abis[$feedKey]));
+        }
+    }
+
+    $meta = array(
+        'source'   => 'feed',
+        'version'  => $ver,
+        'default'  => $variants['universal'],
+        'variants' => $variants,
+        'published_at' => '',
+    );
+    $meta['default']['name'] = basename(parse_url($f['url'], PHP_URL_PATH));
+    foreach ($meta['variants'] as $k => $v) {
+        $meta['variants'][$k]['name'] = basename(parse_url($v['url'], PHP_URL_PATH));
+    }
+    @file_put_contents($file, json_encode($meta));
+    return $meta;
+}
+
 function rx_meta($token)
 {
     $file = rx_cache_dir() . '/meta.json';
@@ -469,12 +576,26 @@ if (isset($_GET['diag']) && $_GET['diag'] === '1') {
     $d = @rx_cache_dir();
     echo "پوشه‌ی کش         : " . (is_dir($d) ? $d : '❌ ساخته نشد') . "\n";
     echo "قابل نوشتن        : " . (is_dir($d) && is_writable($d) ? 'بله' : '❌ خیر — دسترسی ۷۵۵ یا ۷۷۵ بدهید') . "\n";
+    echo "منبع نسخه         : " . ($RX_FEED !== '' ? 'فیدِ پنل — ' . $RX_FEED : 'ریلیزهای گیت‌هاب') . "\n";
+    if ($RX_FEED !== '') {
+        $f = rx_feed_fetch($RX_FEED);
+        if ($f === null)            echo "                    ❌ cURL در دسترس نیست\n";
+        elseif (isset($f['error'])) echo "                    ❌ " . $f['error'] . "\n";
+        else {
+            echo "نسخه‌ی فید         : " . $f['version'] . "\n";
+            echo "universal          : " . $f['url'] . "\n";
+            if (!empty($f['abis']) && is_array($f['abis'])) {
+                foreach ($f['abis'] as $k => $u) echo str_pad($k, 19) . ": " . $u . "\n";
+            }
+        }
+        echo "\n(وقتی فید تنظیم باشد، ریلیزهای گیت‌هاب اصلاً خوانده نمی‌شوند.)\n";
+    }
     $mf = rx_cache_dir() . '/meta.json';
     echo "کشِ نسخه          : " . (is_file($mf)
         ? (time() - filemtime($mf)) . ' ثانیه پیش ساخته شده (TTL ' . RX_META_TTL . ')'
         : 'هنوز ساخته نشده') . "\n";
 
-    if ($RX_TOKEN !== '' && function_exists('curl_init')) {
+    if ($RX_FEED === '' && $RX_TOKEN !== '' && function_exists('curl_init')) {
         echo "\nریلیزهای مخزن (تازه‌ترین اول):\n";
         $dbg = array();
         $rel = rx_latest_release($RX_TOKEN, $dbg);
@@ -509,29 +630,36 @@ if (isset($_GET['diag']) && $_GET['diag'] === '1') {
 }
 
 // ---------------------------------------------------------------- اجرا
-if ($RX_TOKEN === '') {
+// فیدِ پنل بر گیت‌هاب مقدم است: نسخه‌ای که واقعاً منتشر شده آنجاست، و فایلش
+// روی سروری است که کاربرِ بدون VPN می‌تواند بازش کند.
+if ($RX_FEED !== '') {
+    $meta = rx_meta_from_feed($RX_FEED);
+} elseif ($RX_TOKEN !== '') {
+    $meta = rx_meta($RX_TOKEN);
+} else {
     rx_fail(500, 'دانلود هنوز پیکربندی نشده است.',
-        'no token — cubevpn_config.php را بسازید یا cubevpn.php?diag=1 را باز کنید');
+        'نه update_url و نه token تنظیم نشده — cubevpn.php?diag=1 را باز کنید');
 }
-
-$meta = rx_meta($RX_TOKEN);
 
 if (rx_is_json_mode()) {
     header('Content-Type: application/json; charset=utf-8');
     header('Cache-Control: public, max-age=300');
+    $dsize = isset($meta['default']['size']) ? (int) $meta['default']['size'] : 0;
     $out = array(
         'ok'           => true,
+        'source'       => isset($meta['source']) ? $meta['source'] : 'github',
         'version'      => $meta['version'],
         'file'         => $meta['default']['name'],
-        'size'         => $meta['default']['size'],
-        'size_mb'      => $meta['default']['size'] > 0 ? round($meta['default']['size'] / 1048576, 1) : null,
+        'size'         => $dsize,
+        'size_mb'      => $dsize > 0 ? round($dsize / 1048576, 1) : null,
         'published_at' => $meta['published_at'],
         'variants'     => array(),
     );
     foreach ($meta['variants'] as $abi => $v) {
+        $vs = isset($v['size']) ? (int) $v['size'] : 0;
         $out['variants'][$abi] = array(
             'name'    => $v['name'],
-            'size_mb' => $v['size'] > 0 ? round($v['size'] / 1048576, 1) : null,
+            'size_mb' => $vs > 0 ? round($vs / 1048576, 1) : null,
         );
     }
     echo json_encode($out);
@@ -544,6 +672,14 @@ if ($abi !== '' && isset($meta['variants'][$abi])) {
     $variant = $meta['variants'][$abi];
 } else {
     $variant = $meta['default'];      // درخواستِ نامعتبر → همان پیش‌فرضِ امن
+}
+
+// فیدِ پنل فایل را خودش سرو می‌کند و عمومی است، پس نیازی نیست ۱۸۹ مگابایت را
+// از هاستِ خودمان رد کنیم — فقط هدایت می‌کنیم.
+if (!empty($variant['url'])) {
+    header('Location: ' . $variant['url'], true, 302);
+    header('Cache-Control: no-store');
+    exit;
 }
 
 $path = rx_ensure_file($variant, $RX_TOKEN);
