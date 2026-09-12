@@ -1443,6 +1443,16 @@ function cubepayCreatePayment($order_id, $amount_toman, $customer_user_id = null
         'payment_link' => (string) $decoded['pay_page_url'],
     ];
 
+    // مسیرِ کارتی: کیوب‌پی اطلاعات کارتِ همین فاکتور و تنظیمِ show_card_in_bot
+    // فروشنده را هم برمی‌گرداند. اگر هم کارت و هم ارز دیجیتال فعال باشد، در این
+    // لحظه هنوز کارتی اختصاص نیافته (مشتری انتخاب نکرده) و این بلوک رد می‌شود.
+    if (!empty($decoded['card']['number'])) {
+        $normalized['card'] = $decoded['card'];
+        $normalized['pay_amount_toman'] = (int) ($decoded['pay_amount_toman'] ?? 0);
+        $normalized['expires_in_minutes'] = (int) ($decoded['expires_in_minutes'] ?? 30);
+        $normalized['show_card_in_bot'] = !empty($decoded['show_card_in_bot']);
+    }
+
     return $normalized;
 }
 
