@@ -8,137 +8,7 @@ require_once __DIR__ . '/../function.php';
 require_once __DIR__ . '/../panels.php';
 require_once __DIR__ . '/../keyboard.php';
 require_once __DIR__ . '/../lib/PaymentConfirm.php';
-
-function cubepay_log_event($type, $message, array $context = [])
-{
-    if (function_exists('rx_log_event')) {
-        rx_log_event($type, $message, $context);
-        return;
-    }
-    $line = $type . ': ' . $message;
-    if (!empty($context)) {
-        $line .= ' | ' . json_encode($context, JSON_UNESCAPED_UNICODE | JSON_UNESCAPED_SLASHES);
-    }
-    error_log('[cubepay] ' . $line);
-}
-
-function cubepay_finalize_paid_order($orderId, $Payment_report, $methodLabel)
-{
-    global $connect;
-
-    $atomic = $connect->prepare(
-        "UPDATE Payment_report SET payment_Status = ? WHERE id_order = ? AND payment_Status NOT IN ('paid', 'cancelled')"
-    );
-    $statusPaid = 'paid';
-    $atomic->bind_param('ss', $statusPaid, $orderId);
-    $atomic->execute();
-    $affected = $atomic->affected_rows;
-    $atomic->close();
-    if ($affected < 1) {
-        cubepay_log_event('CUBEPAY_DUPLICATE', 'Duplicate or already-paid callback ignored', [
-            'order_id' => $orderId,
-        ]);
-        exit('Already processed');
-    }
-
-    echo "پرداخت با موفقیت انجام شد";
-
-    $setting = mysqli_fetch_assoc(mysqli_query($connect, "SELECT * FROM setting"));
-    $price = $Payment_report['price'];
-
-    $datatextbotget = select("textbot", "*", null, null, "fetchAll");
-    $datatxtbot = array();
-    foreach ($datatextbotget as $row) {
-        $datatxtbot[] = array(
-            'id_text' => $row['id_text'],
-            'text' => $row['text']
-        );
-    }
-    $datatextbot = array(
-        'textafterpay' => '',
-        'textaftertext' => '',
-        'textmanual' => '',
-        'textselectlocation' => '',
-        'text_wgdashboard' => ''
-    );
-    foreach ($datatxtbot as $item) {
-        if (array_key_exists($item['id_text'], $datatextbot) || (is_string($item['text']) && trim($item['text']) !== '')) {
-            $datatextbot[$item['id_text']] = $item['text'];
-        }
-    }
-    $GLOBALS['textbotlang'] = languagechange('../text.json');
-    // DirectPayment() این آرایه را با global می‌خواند، پس باید در دامنه‌ی
-    // سراسری باشد؛ اینجا داخل تابع ساخته می‌شود و بدون این خط، متنِ
-    // «سرویس با موفقیت ایجاد شد» خالی می‌ماند و تلگرام پیام را رد می‌کند.
-    $GLOBALS['datatextbot'] = $datatextbot;
-
-    DirectPayment($orderId, "../images.jpg");
-
-    $pricecashback = select("PaySetting", "ValuePay", "NamePay", "chashbackcubepay", "select")['ValuePay'];
-    $balanceLookup = $connect->prepare("SELECT * FROM user WHERE id = ? LIMIT 1");
-    $balanceLookup->bind_param('s', $Payment_report['id_user']);
-    $balanceLookup->execute();
-    $Balance_id = $balanceLookup->get_result()->fetch_assoc();
-    $balanceLookup->close();
-    if (!is_array($Balance_id)) {
-        cubepay_log_event('CUBEPAY_USER_MISSING', 'Linked user row not found after paid update', [
-            'order_id' => $orderId,
-            'id_user' => $Payment_report['id_user'] ?? null,
-        ]);
-        $Balance_id = ['id' => $Payment_report['id_user'] ?? '', 'username' => '—', 'Balance' => 0];
-    }
-    $cashbackEligible = !function_exists('rx_cashbackEligibleForKey')
-        || rx_cashbackEligibleForKey("chashbackcubepay", $Balance_id['register'] ?? null, $Payment_report['id_invoice'] ?? null, $Balance_id['id'] ?? null, $Payment_report['id_order'] ?? null);
-    if ($cashbackEligible && $pricecashback != "0") {
-        $result = (int) floor(($Payment_report['price'] * $pricecashback) / 100);
-        if (rx_cashback_credit_once($Payment_report['id_order'], $Balance_id['id'], $result, 'chashbackcubepay', 'هدیه بازگشت وجه کیوب‌پی') === 'credited') {
-            $pricecashback = number_format($pricecashback);
-            $text_report = "🎁 کاربر عزیز مبلغ " . rxFormatToman($result) . " تومان به عنوان هدیه واریز به حساب شما واریز گردید.";
-            sendmessage($Balance_id['id'], $text_report, null, 'HTML');
-        }
-    }
-
-    $paymentreports = select("topicid", "idreport", "report", "paymentreport", "select")['idreport'];
-    $usernameEsc = htmlspecialchars((string) $Balance_id['username'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-    $userIdEsc = htmlspecialchars((string) $Balance_id['id'], ENT_QUOTES | ENT_SUBSTITUTE, 'UTF-8');
-    $rlm = "\xE2\x80\x8F";
-    $rxFmtPrice = rxFormatToman($price);
-    $text_reportpayment = "💵 پرداخت جدید
-<blockquote>- 👤 نام کاربری کاربر : @{$usernameEsc}</blockquote>
-<blockquote>- 👤 آیدی عددی کاربر : {$rlm}<code>{$userIdEsc}</code></blockquote>
-<blockquote>- 💰 مبلغ اعتباردهی : {$rxFmtPrice} تومان</blockquote>
-<blockquote>- 💳 روش پرداخت : کیوب‌پی ({$methodLabel})</blockquote>";
-    if (strlen($setting['Channel_Report']) > 0) {
-        telegram('sendmessage', [
-            'chat_id' => $setting['Channel_Report'],
-            'message_thread_id' => $paymentreports,
-            'text' => $text_reportpayment,
-            'parse_mode' => "HTML"
-        ]);
-    }
-}
-
-function cubepay_lookup_by_order($orderId)
-{
-    global $connect;
-    $stmt = $connect->prepare("SELECT * FROM Payment_report WHERE id_order = ? AND Payment_Method = 'cubepay' LIMIT 1");
-    $stmt->bind_param('s', $orderId);
-    $stmt->execute();
-    $row = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
-    return is_array($row) ? $row : null;
-}
-
-function cubepay_lookup_by_authority($authority)
-{
-    global $connect;
-    $stmt = $connect->prepare("SELECT * FROM Payment_report WHERE cubepay_authority = ? LIMIT 1");
-    $stmt->bind_param('s', $authority);
-    $stmt->execute();
-    $row = $stmt->get_result()->fetch_assoc();
-    $stmt->close();
-    return is_array($row) ? $row : null;
-}
+require_once __DIR__ . '/../lib/CubePay.php';
 
 function cubepay_process_card_callback($authority, $orderIdHint)
 {
@@ -174,9 +44,6 @@ function cubepay_process_card_callback($authority, $orderIdHint)
         http_response_code(404);
         exit('Order not found');
     }
-    if ($Payment_report['payment_Status'] == "expire" || $Payment_report['payment_Status'] == "cancelled") {
-        return;
-    }
     if ($orderIdHint !== null && (string) $orderIdHint !== (string) $Payment_report['id_order']) {
         cubepay_log_event('CUBEPAY_ORDER_MISMATCH', 'order_id does not match stored value for this authority', [
             'authority' => $authority,
@@ -210,7 +77,8 @@ function cubepay_process_card_callback($authority, $orderIdHint)
             'message' => $verify['message'] ?? null,
             'status_code' => $verifyStatusCode,
         ]);
-        if ($verifyStatusCode === 410) {
+        $localStatus = (string) $Payment_report['payment_Status'];
+        if ($verifyStatusCode === 410 && $localStatus !== 'expire' && $localStatus !== 'cancelled') {
             $reasonFa = (string) ($verify['message'] ?? '') !== ''
                 ? (string) $verify['message']
                 : 'مهلت تراکنش کارت‌به‌کارت کیوب‌پی تمام شده یا ناموفق بوده است';
@@ -219,7 +87,12 @@ function cubepay_process_card_callback($authority, $orderIdHint)
         exit('Not paid');
     }
 
-    cubepay_finalize_paid_order($orderId, $Payment_report, 'کارت به کارت');
+    // سفارشِ expire/cancelled هم اینجا تحویل می‌شود: verify-payment فقط همین یک
+    // بار success می‌دهد و اگر الان رد شود، پولِ مشتری دیگر قابل پیگیری نیست.
+    if (!cubepay_finalize_paid_order($orderId, $Payment_report, 'کارت به کارت')) {
+        exit('Already processed');
+    }
+    echo "پرداخت با موفقیت انجام شد";
 }
 
 function cubepay_process_crypto_callback($orderId, $status, $amount, $sig, $paymentId, $payCurrency)
@@ -244,11 +117,13 @@ function cubepay_process_crypto_callback($orderId, $status, $amount, $sig, $paym
         http_response_code(404);
         exit('Order not found');
     }
-    if ($Payment_report['payment_Status'] == "expire" || $Payment_report['payment_Status'] == "cancelled") {
-        return;
-    }
     if ($Payment_report['payment_Status'] == "paid") {
         exit('Already processed');
+    }
+    // callback امضاشده‌ی «paid» برای سفارشِ expire/cancelled هم تحویل می‌شود؛
+    // فقط پیام‌های غیرِ paid برای این سفارش‌ها نادیده گرفته می‌شوند.
+    if ($status !== 'paid' && ($Payment_report['payment_Status'] == "expire" || $Payment_report['payment_Status'] == "cancelled")) {
+        return;
     }
 
     if ($status !== 'paid') {
@@ -264,7 +139,10 @@ function cubepay_process_crypto_callback($orderId, $status, $amount, $sig, $paym
         exit('Not paid');
     }
 
-    cubepay_finalize_paid_order($orderId, $Payment_report, 'ارز دیجیتال' . ($payCurrency !== '' ? " ({$payCurrency})" : ''));
+    if (!cubepay_finalize_paid_order($orderId, $Payment_report, 'ارز دیجیتال' . ($payCurrency !== '' ? " ({$payCurrency})" : ''))) {
+        exit('Already processed');
+    }
+    echo "پرداخت با موفقیت انجام شد";
 }
 
 function cubepay_process_webhook()
